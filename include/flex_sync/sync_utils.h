@@ -29,8 +29,15 @@ namespace flex_sync {
       if (t2m.empty()) {
         throw std::runtime_error(topic + " has empty queue!");
       }
-      while (t2m.begin()->first < t) {
+      while (!t2m.empty() && t2m.begin()->first < t) {
         t2m.erase(t2m.begin());
+      }
+      if (t2m.empty()) {
+        ROS_ERROR_STREAM(topic << " queue is empty for time: " << t);
+        throw std::runtime_error(topic + " queue is empty!");
+      }
+      if (t2m.begin()->first != t) {
+        throw std::runtime_error(topic + " has wrong time stamp!");
       }
       mvec.push_back(t2m.begin()->second);
       t2m.erase(t2m.begin());

@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
 
 
 /*
@@ -28,6 +29,9 @@ namespace flex_sync {
   public:
     typedef boost::shared_ptr<T const> ConstPtr;
     typedef std::function<void(const vector<ConstPtr> &)> Callback;
+    typedef map<Time, ConstPtr> MsgQueue;
+    typedef map<string, MsgQueue> MsgMap;
+    typedef map<Time, int> CountMap;
     
     Sync(const vector<string> &topics, const Callback &callback) :
       topics_(topics),  callback_(callback)  {
@@ -37,13 +41,23 @@ namespace flex_sync {
       }
     }
     void process(const std::string &topic, const ConstPtr &msg) {
+      std::unique_lock<std::mutex> lock(mutex_);
       const Time &t = msg->header.stamp;
+      auto &q   = msgMap_[topic];
+      auto qit = q.find(t);
       // store message in a per-topic queue
-      msgMap_[topic][t] = msg;
+      if (qit != q.end()) {
+        ROS_WARN_STREAM("duplicate on topic " << topic << " ignored, t=" << t);
+        return;
+      }
+      q.insert(typename MsgQueue::value_type(t, msg));
       // update the map that counts how many
       // messages we've received for that time slot
       auto it = update_count(t, &msgCount_);
-      if (it->second == (int) (topics_.size())) {
+      if (it->second > (int) topics_.size()) {
+        ROS_WARN_STREAM("too many messages in queue: " << it->second);
+      }
+      if (it->second >= (int) topics_.size()) {
         // got a full set of messages for that time slot
         currentTime_ = t;
         // publishMessages also cleans out old messages from the queues
@@ -53,11 +67,12 @@ namespace flex_sync {
         msgCount_.erase(msgCount_.begin(), it);
       }
     }
-    const Time &getCurrentTime() const { return (currentTime_); }
+    const Time &getCurrentTime() const {
+      std::unique_lock<std::mutex> lock(mutex_);
+      return (currentTime_);
+    }
 
   private:
-    typedef map<string, map<Time, ConstPtr>> MsgMap;
-    typedef map<Time, int> CountMap;
     void publishMessages(const Time &t) {
       vector<ConstPtr> mvec = make_vec(t, topics_, &msgMap_);
       callback_(mvec);
@@ -68,6 +83,7 @@ namespace flex_sync {
     MsgMap          msgMap_;
     CountMap        msgCount_;
     Callback        callback_;
+    std::mutex      mutex_;
   };
 }
 
