@@ -58,6 +58,22 @@ namespace flex_sync {
     }
     return (it);
   }
+  // helper function to drop message
+  static void decrease_count(const ros::Time &t,
+                             std::map<ros::Time, int> *msgCountMap) {
+    // check if we have this time stamp
+    std::map<ros::Time, int>::iterator it = msgCountMap->find(t);
+    if (it == msgCountMap->end()) {
+      // no messages received for this tstamp, should not happen!
+      ROS_ERROR_STREAM("no count for " << t);
+      return;
+    } else {
+      it->second--;
+      if (it->second <= 0) {
+        msgCountMap->erase(it);
+      }
+    }
+  }
 
 }
 

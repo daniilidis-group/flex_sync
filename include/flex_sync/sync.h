@@ -33,12 +33,25 @@ namespace flex_sync {
     typedef map<string, MsgQueue> MsgMap;
     typedef map<Time, int> CountMap;
     
-    Sync(const vector<string> &topics, const Callback &callback) :
-      topics_(topics),  callback_(callback)  {
+    Sync(const vector<string> &topics, const Callback &callback,
+         unsigned int maxQueueSize = 5) :
+      callback_(callback), maxQueueSize_(maxQueueSize)  {
       // initialize time-to-message maps for each topic
-      for (const auto &topic: topics_) {
-        msgMap_[topic] = map<Time, ConstPtr>();
+      for (const auto &topic: topics) {
+        addTopic(topic);
       }
+    }
+    void setMaxQueueSize(int qs) {
+      maxQueueSize_ = qs;
+    }
+    bool addTopic(const std::string &topic) {
+      if (msgMap_.count(topic) == 0) {
+        msgMap_[topic] = map<Time, ConstPtr>();
+        topics_.push_back(topic);
+        return (true);
+      }
+      ROS_WARN_STREAM("duplicate sync topic added: " << topic);
+      return (false);
     }
     void process(const std::string &topic, const ConstPtr &msg) {
       std::unique_lock<std::mutex> lock(mutex_);
@@ -49,6 +62,11 @@ namespace flex_sync {
       if (qit != q.end()) {
         ROS_WARN_STREAM("duplicate on topic " << topic << " ignored, t=" << t);
         return;
+      }
+      if (q.size() >= maxQueueSize_) {
+        auto it = q.begin();
+        decrease_count(it->first, &msgCount_);
+        q.erase(it);
       }
       q.insert(typename MsgQueue::value_type(t, msg));
       // update the map that counts how many
@@ -77,7 +95,8 @@ namespace flex_sync {
       vector<ConstPtr> mvec = make_vec(t, topics_, &msgMap_);
       callback_(mvec);
     }
-    
+
+    unsigned int    maxQueueSize_{0};
     vector<string>  topics_;
     Time            currentTime_{0.0};
     MsgMap          msgMap_;
