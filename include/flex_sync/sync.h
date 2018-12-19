@@ -16,47 +16,55 @@
 
 
 /*
- * Class for synchronizing across a single message type
+ * Class for synchronizing across variable number of messages
  */
 
 namespace flex_sync {
-  template <class T>
-  class Sync {
+  class SyncBase {
+  public:
     using string = std::string;
     using Time   = ros::Time;
+    typedef std::map<Time, int> CountMap;
+    // these are so we can use vector and map as shorthand
     template<class F> using vector = std::vector<F>;
     template<class F, class K> using map = std::map<F, K>;
-  public:
-    typedef boost::shared_ptr<T const> ConstPtr;
-    typedef std::function<void(const vector<ConstPtr> &)> Callback;
-    typedef map<Time, ConstPtr> MsgQueue;
-    typedef map<string, MsgQueue> MsgMap;
-    typedef map<Time, int> CountMap;
-    
-    Sync(const vector<string> &topics, const Callback &callback,
-         unsigned int maxQueueSize = 5) :
-      callback_(callback), maxQueueSize_(maxQueueSize)  {
-      // initialize time-to-message maps for each topic
-      for (const auto &topic: topics) {
-        addTopic(topic);
-      }
+
+    SyncBase(const vector<vector<string>> &tv, int qs) :
+      maxQueueSize_(qs),
+      topicsVec_(tv) {
     }
+
+    virtual ~SyncBase() {};
+
+    const Time getCurrentTime() const {
+      std::unique_lock<std::mutex> lock(mutex_);
+      return (currentTime_);
+    }
+
     void setMaxQueueSize(int qs) {
       maxQueueSize_ = qs;
     }
-    bool addTopic(const std::string &topic) {
-      if (msgMap_.count(topic) == 0) {
-        msgMap_[topic] = map<Time, ConstPtr>();
+
+    virtual void publishMessages(const Time &t) = 0;
+
+    template<typename P>
+    bool addTopic(const std::string &topic,
+                  map<string, map<Time, P>> *msgMap) {
+      if (msgMap->count(topic) == 0) {
+        (*msgMap)[topic] = map<Time, P>();
         topics_.push_back(topic);
         return (true);
       }
       ROS_WARN_STREAM("duplicate sync topic added: " << topic);
       return (false);
     }
-    void process(const std::string &topic, const ConstPtr &msg) {
+
+    template<typename P>
+    void process(const std::string &topic, P msg,
+                 map<string, map<Time, P>> *msgMap) {
       std::unique_lock<std::mutex> lock(mutex_);
       const Time &t = msg->header.stamp;
-      auto &q   = msgMap_[topic];
+      auto &q   = (*msgMap)[topic];
       auto qit = q.find(t);
       // store message in a per-topic queue
       if (qit != q.end()) {
@@ -68,7 +76,7 @@ namespace flex_sync {
         decrease_count(it->first, &msgCount_);
         q.erase(it);
       }
-      q.insert(typename MsgQueue::value_type(t, msg));
+      q.insert(typename map<Time, P>::value_type(t, msg));
       // update the map that counts how many
       // messages we've received for that time slot
       auto it = update_count(t, &msgCount_);
@@ -85,24 +93,166 @@ namespace flex_sync {
         msgCount_.erase(msgCount_.begin(), it);
       }
     }
-    const Time &getCurrentTime() const {
-      std::unique_lock<std::mutex> lock(mutex_);
-      return (currentTime_);
+
+  protected:
+    unsigned int    maxQueueSize_{0};
+    vector<string>  topics_;
+    vector<vector<string>>  topicsVec_;
+    Time            currentTime_{0.0};
+    CountMap        msgCount_;
+    mutable std::mutex      mutex_;
+  };
+
+  // declare variadic template arguments,
+  // then specialize below 
+  template <typename ... Ts> class Sync{};
+
+  template <typename T1>
+  class Sync<T1>: public SyncBase {
+    typedef boost::shared_ptr<T1 const> T1ConstPtr;
+    typedef std::function<void(const vector<T1ConstPtr> &)> Callback;
+    typedef map<string, map<Time, T1ConstPtr>> MsgMap1;
+  public:
+    
+    Sync(const vector<vector<string>> &topics, const Callback &callback,
+         unsigned int qs = 5) : SyncBase(topics, qs),
+                                callback_(callback)  {
+      // initialize time-to-message maps for each topic
+      if (topics.size() != 1) {
+        ROS_ERROR_STREAM("topics vector must have size 1!");
+        return;
+      }
+      for (const auto &topic: topics[0]) {
+        SyncBase::addTopic(topic, &msgMap1_);
+      }
+    }
+
+    void process(const std::string &topic, const T1ConstPtr &msg) {
+      SyncBase::process(topic, msg, &msgMap1_);
     }
 
   private:
-    void publishMessages(const Time &t) {
-      vector<ConstPtr> mvec = make_vec(t, topics_, &msgMap_);
+    void publishMessages(const Time &t) override {
+      vector<T1ConstPtr> mvec = make_vec(t, topics_, &msgMap1_);
       callback_(mvec);
     }
 
-    unsigned int    maxQueueSize_{0};
-    vector<string>  topics_;
-    Time            currentTime_{0.0};
-    MsgMap          msgMap_;
-    CountMap        msgCount_;
+    MsgMap1   msgMap1_;
+    Callback  callback_;
+  };
+  
+  template <class T1, class T2>
+  class Sync<T1,T2>: public SyncBase {
+    using string = std::string;
+    using Time   = ros::Time;
+    template<class F> using vector = std::vector<F>;
+    template<class F, class K> using map = std::map<F, K>;
+  public:
+    typedef boost::shared_ptr<T1 const> T1ConstPtr;
+    typedef boost::shared_ptr<T2 const> T2ConstPtr;
+    typedef std::function<void(const vector<T1ConstPtr> &,
+                               const vector<T2ConstPtr> &)> Callback;
+    typedef map<string, map<Time, T1ConstPtr>> MsgMap1;
+    typedef map<string, map<Time, T2ConstPtr>> MsgMap2;
+
+    Sync(const vector<vector<string>> &topics,
+          const Callback &callback,
+          unsigned int maxQueueSize = 5) :
+      SyncBase(topics, maxQueueSize),
+      callback_(callback) {
+      // initialize time-to-message maps for each topic
+      if (topics.size() != 2) {
+        ROS_ERROR_STREAM("topics vector must have size 2!");
+        return;
+      }
+      for (const auto &topic: topics[0]) {
+        SyncBase::addTopic(topic, &msgMap1_);
+      }
+      for (const auto &topic: topics[1]) {
+        SyncBase::addTopic(topic, &msgMap2_);
+      }
+    }
+
+    void process(const std::string &topic, const T1ConstPtr &msgPtr) {
+      SyncBase::process(topic, msgPtr, &msgMap1_);
+    }
+
+    void process(const std::string &topic, const T2ConstPtr &msgPtr) {
+      SyncBase::process(topic, msgPtr, &msgMap2_);
+    }
+
+  private:
+    void publishMessages(const Time &t) override {
+      vector<T1ConstPtr> mvec1 = make_vec<T1>(t, topicsVec_[0], &msgMap1_);
+      vector<T2ConstPtr> mvec2 = make_vec<T2>(t, topicsVec_[1], &msgMap2_);
+      callback_(mvec1, mvec2);
+    }
+
     Callback        callback_;
-    std::mutex      mutex_;
+    MsgMap1         msgMap1_;
+    MsgMap2         msgMap2_;
+  };
+  
+  /* -------------------------- 3 different types ----------------- */
+  
+  template <class T1, class T2, class T3>
+  class Sync<T1,T2,T3>: public SyncBase {
+  public:
+    typedef boost::shared_ptr<T1 const> T1ConstPtr;
+    typedef boost::shared_ptr<T2 const> T2ConstPtr;
+    typedef boost::shared_ptr<T3 const> T3ConstPtr;
+    typedef std::function<void(const vector<T1ConstPtr> &,
+                               const vector<T2ConstPtr> &,
+                               const vector<T3ConstPtr> &)> Callback;
+    typedef map<string, map<Time, T1ConstPtr>> MsgMap1;
+    typedef map<string, map<Time, T2ConstPtr>> MsgMap2;
+    typedef map<string, map<Time, T3ConstPtr>> MsgMap3;
+
+    Sync(const vector<vector<string>> &topics,
+          const Callback &callback,
+          unsigned int maxQueueSize = 5) :
+      SyncBase(topics, maxQueueSize),
+      callback_(callback) {
+      // initialize time-to-message maps for each topic
+      if (topics.size() != 3) {
+        ROS_ERROR_STREAM("topics vector must have size 3!");
+        return;
+      }
+      for (const auto &topic: topics[0]) {
+        SyncBase::addTopic(topic, &msgMap1_);
+      }
+      for (const auto &topic: topics[1]) {
+        SyncBase::addTopic(topic, &msgMap2_);
+      }
+      for (const auto &topic: topics[2]) {
+        SyncBase::addTopic(topic, &msgMap3_);
+      }
+    }
+
+    void process(const std::string &topic, const T1ConstPtr &msgPtr) {
+      SyncBase::process(topic, msgPtr, &msgMap1_);
+    }
+
+    void process(const std::string &topic, const T2ConstPtr &msgPtr) {
+      SyncBase::process(topic, msgPtr, &msgMap2_);
+    }
+
+    void process(const std::string &topic, const T3ConstPtr &msgPtr) {
+      SyncBase::process(topic, msgPtr, &msgMap3_);
+    }
+
+  private:
+    void publishMessages(const Time &t) override {
+      vector<T1ConstPtr> mvec1 = make_vec<T1>(t, topicsVec_[0], &msgMap1_);
+      vector<T2ConstPtr> mvec2 = make_vec<T2>(t, topicsVec_[1], &msgMap2_);
+      vector<T3ConstPtr> mvec3 = make_vec<T3>(t, topicsVec_[2], &msgMap3_);
+      callback_(mvec1, mvec2, mvec3);
+    }
+
+    Callback        callback_;
+    MsgMap1         msgMap1_;
+    MsgMap2         msgMap2_;
+    MsgMap3         msgMap3_;
   };
 }
 
