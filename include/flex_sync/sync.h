@@ -110,9 +110,9 @@ namespace flex_sync {
   template <typename T1>
   class Sync<T1>: public SyncBase {
     typedef boost::shared_ptr<T1 const> T1ConstPtr;
-    typedef std::function<void(const vector<T1ConstPtr> &)> Callback;
     typedef map<string, map<Time, T1ConstPtr>> MsgMap1;
   public:
+    typedef std::function<void(const vector<T1ConstPtr> &)> Callback;
     
     Sync(const vector<vector<string>> &topics, const Callback &callback,
          unsigned int qs = 5) : SyncBase(topics, qs),
@@ -125,6 +125,10 @@ namespace flex_sync {
       for (const auto &topic: topics[0]) {
         SyncBase::addTopic(topic, &msgMap1_);
       }
+    }
+
+    void addTopic(const std::string &topic) {
+      SyncBase::addTopic(topic, &msgMap1_);
     }
 
     void process(const std::string &topic, const T1ConstPtr &msg) {
@@ -171,6 +175,13 @@ namespace flex_sync {
       for (const auto &topic: topics[1]) {
         SyncBase::addTopic(topic, &msgMap2_);
       }
+    }
+
+    void addTopic1(const std::string &topic) {
+      SyncBase::addTopic(topic, &msgMap1_);
+    }
+    void addTopic2(const std::string &topic) {
+      SyncBase::addTopic(topic, &msgMap2_);
     }
 
     void process(const std::string &topic, const T1ConstPtr &msgPtr) {
