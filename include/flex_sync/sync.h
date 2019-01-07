@@ -96,12 +96,12 @@ namespace flex_sync {
       callback_(mvec);
     }
 
-    unsigned int    maxQueueSize_{0};
     vector<string>  topics_;
     Time            currentTime_{0.0};
     MsgMap          msgMap_;
     CountMap        msgCount_;
     Callback        callback_;
+    unsigned int    maxQueueSize_{0};
     std::mutex      mutex_;
   };
 }
