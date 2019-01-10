@@ -264,7 +264,6 @@ namespace flex_sync {
     MsgMap1         msgMap1_;
     MsgMap2         msgMap2_;
     MsgMap3         msgMap3_;
->>>>>>> febcc7ed06ca5ba57e9bf2973646c47d921dc365
   };
 }
 
