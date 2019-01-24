@@ -42,6 +42,14 @@ static void callback3(const std::vector<ConstPtr1> &p1,
             << " " << p3[0]->header.stamp << std::endl;
 }
 
+static void callback3_0(const std::vector<ConstPtr1> &p1,
+                      const std::vector<ConstPtr2> &p2,
+                      const std::vector<ConstPtr3> &p3) {
+  std::cout << "got callback3_0:"
+            << " " << p1[0]->header.stamp
+            << " " << p2[0]->header.stamp << std::endl;
+}
+
 using std::vector;
 using std::string;
 
@@ -85,6 +93,13 @@ int main(int argc, char** argv) {
     sync3.process(topics[0][0], msg1);
     sync3.process(topics[1][0], msg2);
     sync3.process(topics[2][0], msg3);
+
+    // now test Sync3 w/o traffic on 3rd channel.
+    topics[2].clear(); // erase all topics for 3rd channel
+    flex_sync::Sync<TestMsg1, TestMsg2, TestMsg3> sync3_0(topics, callback3_0);
+    boost::shared_ptr<TestMsg3> msg3_0(new TestMsg3());
+    sync3_0.process(topics[0][0], msg1);
+    sync3_0.process(topics[1][0], msg2);
     
     ros::spin();
   } catch (const std::exception& e) {
