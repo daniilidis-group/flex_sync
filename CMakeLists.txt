@@ -4,8 +4,13 @@ project(flex_sync)
 add_definitions(-std=c++11 -g -Wall)
 
 find_package(catkin REQUIRED COMPONENTS roscpp std_msgs message_generation)
+
+catkin_python_setup()
+
+
 add_message_files(DIRECTORY msg FILES TestMsg1.msg TestMsg2.msg TestMsg3.msg)
 generate_messages(DEPENDENCIES std_msgs)
+
 
 catkin_package(
 INCLUDE_DIRS include
