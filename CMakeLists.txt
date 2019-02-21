@@ -21,6 +21,7 @@ include_directories(include
   ${catkin_INCLUDE_DIRS})
 
 add_executable(${PROJECT_NAME}_test src/${PROJECT_NAME}_test.cpp)
+add_dependencies(${PROJECT_NAME}_test ${catkin_EXPORTED_TARGETS})
 target_link_libraries(${PROJECT_NAME}_test ${catkin_LIBRARIES})
 
 install(DIRECTORY include/${PROJECT_NAME}/
