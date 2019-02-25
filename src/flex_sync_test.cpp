@@ -3,21 +3,18 @@
  */
 
 #include "flex_sync/sync.h"
+#include "flex_sync/subscribing_sync.h"
+#include "flex_sync/TestMsg1.h"
+#include "flex_sync/TestMsg2.h"
+#include "flex_sync/TestMsg3.h"
 
 #include <ros/ros.h>
-#include <std_msgs/Header.h>
+#include <std_msgs/String.h>
+#include <std_msgs/Time.h>
 
-struct TestMsg1 {
-  std_msgs::Header header;
-};
-
-struct TestMsg2 {
-  std_msgs::Header header;
-};
-
-struct TestMsg3 {
-  std_msgs::Header header;
-};
+using TestMsg1 = flex_sync::TestMsg1;
+using TestMsg2 = flex_sync::TestMsg2;
+using TestMsg3 = flex_sync::TestMsg3;
 
 typedef boost::shared_ptr<TestMsg1 const> ConstPtr1;
 typedef boost::shared_ptr<TestMsg2 const> ConstPtr2;
@@ -48,6 +45,15 @@ static void callback3_0(const std::vector<ConstPtr1> &p1,
   std::cout << "got callback3_0:"
             << " " << p1[0]->header.stamp
             << " " << p2[0]->header.stamp << std::endl;
+}
+
+static void callback3s(const std::vector<ConstPtr1> &p1,
+                       const std::vector<ConstPtr2> &p2,
+                       const std::vector<ConstPtr3> &p3) {
+  std::cout << "got callback3:"
+            << " " << p1[0]->header.stamp
+            << " " << p2[0]->header.stamp
+            << " " << p3[0]->header.stamp << std::endl;
 }
 
 using std::vector;
@@ -96,11 +102,15 @@ int main(int argc, char** argv) {
 
     // now test Sync3 w/o traffic on 3rd channel.
     topics[2].clear(); // erase all topics for 3rd channel
-    flex_sync::Sync<TestMsg1, TestMsg2, TestMsg3> sync3_0(topics, callback3_0);
+    flex_sync::Sync<TestMsg1, TestMsg2, TestMsg3>
+      sync3_0(topics, callback3_0);
     boost::shared_ptr<TestMsg3> msg3_0(new TestMsg3());
     sync3_0.process(topics[0][0], msg1);
     sync3_0.process(topics[1][0], msg2);
-    
+
+    // test only if it compiles!
+    flex_sync::SubscribingSync<TestMsg1, TestMsg2, TestMsg3>
+      ssink(pnh, topics, callback3s);
     ros::spin();
   } catch (const std::exception& e) {
     ROS_ERROR("%s: %s", pnh.getNamespace().c_str(), e.what());

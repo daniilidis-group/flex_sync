@@ -29,9 +29,8 @@ namespace flex_sync {
     template<class F> using vector = std::vector<F>;
     template<class F, class K> using map = std::map<F, K>;
 
-    SyncBase(const vector<vector<string>> &tv, int qs) :
-      maxQueueSize_(qs),
-      topicsVec_(tv) {
+    SyncBase(int qs) :
+      maxQueueSize_(qs) {
     }
 
     virtual ~SyncBase() {};
@@ -45,14 +44,22 @@ namespace flex_sync {
       maxQueueSize_ = qs;
     }
 
+    unsigned int qs() const { return (maxQueueSize_); }
+
     virtual void publishMessages(const Time &t) = 0;
 
+
+  protected:
     template<typename P>
-    bool addTopic(const std::string &topic,
+    bool addTopic(const std::string &topic, int idx,
                   map<string, map<Time, P>> *msgMap) {
       if (msgMap->count(topic) == 0) {
         (*msgMap)[topic] = map<Time, P>();
         topics_.push_back(topic);
+        while (topicsVec_.size() <= (unsigned int)idx) {
+          topicsVec_.push_back(std::vector<std::string>());
+        }
+        topicsVec_[idx].push_back(topic);
         return (true);
       }
       ROS_WARN_STREAM("duplicate sync topic added: " << topic);
@@ -81,7 +88,8 @@ namespace flex_sync {
       // messages we've received for that time slot
       auto it = update_count(t, &msgCount_);
       if (it->second > (int) topics_.size()) {
-        ROS_WARN_STREAM("too many messages in queue: " << it->second);
+        ROS_WARN_STREAM("flex_sync: " << topic << " has " << it->second
+                        << " msgs for " << (int)topics_.size() << " topics");
       }
       if (it->second >= (int) topics_.size()) {
         // got a full set of messages for that time slot
@@ -93,8 +101,7 @@ namespace flex_sync {
         msgCount_.erase(msgCount_.begin(), it);
       }
     }
-
-  protected:
+    // ------------ variables -----------
     unsigned int    maxQueueSize_{0};
     vector<string>  topics_;
     vector<vector<string>>  topicsVec_;
@@ -115,7 +122,7 @@ namespace flex_sync {
     typedef std::function<void(const vector<T1ConstPtr> &)> Callback;
     
     Sync(const vector<vector<string>> &topics, const Callback &callback,
-         unsigned int qs = 5) : SyncBase(topics, qs),
+         unsigned int qs = 5) : SyncBase(qs),
                                 callback_(callback)  {
       // initialize time-to-message maps for each topic
       if (topics.size() != 1) {
@@ -123,12 +130,12 @@ namespace flex_sync {
         return;
       }
       for (const auto &topic: topics[0]) {
-        SyncBase::addTopic(topic, &msgMap1_);
+        SyncBase::addTopic(topic, 0, &msgMap1_);
       }
     }
 
     void addTopic(const std::string &topic) {
-      SyncBase::addTopic(topic, &msgMap1_);
+      SyncBase::addTopic(topic, 0, &msgMap1_);
     }
 
     void process(const std::string &topic, const T1ConstPtr &msg) {
@@ -164,7 +171,7 @@ namespace flex_sync {
     Sync(const vector<vector<string>> &topics,
           const Callback &callback,
           unsigned int maxQueueSize = 5) :
-      SyncBase(topics, maxQueueSize),
+      SyncBase(maxQueueSize),
       callback_(callback) {
       // initialize time-to-message maps for each topic
       if (topics.size() != 2) {
@@ -172,18 +179,18 @@ namespace flex_sync {
         return;
       }
       for (const auto &topic: topics[0]) {
-        SyncBase::addTopic(topic, &msgMap1_);
+        addTopic1(topic);
       }
       for (const auto &topic: topics[1]) {
-        SyncBase::addTopic(topic, &msgMap2_);
+        addTopic2(topic);
       }
     }
 
     void addTopic1(const std::string &topic) {
-      SyncBase::addTopic(topic, &msgMap1_);
+      SyncBase::addTopic(topic, 0, &msgMap1_);
     }
     void addTopic2(const std::string &topic) {
-      SyncBase::addTopic(topic, &msgMap2_);
+      SyncBase::addTopic(topic, 1, &msgMap2_);
     }
 
     void process(const std::string &topic, const T1ConstPtr &msgPtr) {
@@ -227,7 +234,7 @@ namespace flex_sync {
     Sync(const vector<vector<string>> &topics,
           const Callback &callback,
           unsigned int maxQueueSize = 5) :
-      SyncBase(topics, maxQueueSize),
+      SyncBase(maxQueueSize),
       callback_(callback) {
       // initialize time-to-message maps for each topic
       if (topics.size() != 3) {
@@ -235,14 +242,24 @@ namespace flex_sync {
         return;
       }
       for (const auto &topic: topics[0]) {
-        SyncBase::addTopic(topic, &msgMap1_);
+        addTopic1(topic);
       }
       for (const auto &topic: topics[1]) {
-        SyncBase::addTopic(topic, &msgMap2_);
+        addTopic2(topic);
       }
       for (const auto &topic: topics[2]) {
-        SyncBase::addTopic(topic, &msgMap3_);
+        addTopic3(topic);
       }
+    }
+
+    void addTopic1(const std::string &topic) {
+      SyncBase::addTopic(topic, 0, &msgMap1_);
+    }
+    void addTopic2(const std::string &topic) {
+      SyncBase::addTopic(topic, 1, &msgMap2_);
+    }
+    void addTopic3(const std::string &topic) {
+      SyncBase::addTopic(topic, 2, &msgMap3_);
     }
 
     void process(const std::string &topic, const T1ConstPtr &msgPtr) {
