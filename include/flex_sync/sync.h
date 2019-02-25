@@ -152,6 +152,8 @@ namespace flex_sync {
     template<class F> using vector = std::vector<F>;
     template<class F, class K> using map = std::map<F, K>;
   public:
+    typedef T1 Type1;
+    typedef T2 Type2;
     typedef boost::shared_ptr<T1 const> T1ConstPtr;
     typedef boost::shared_ptr<T2 const> T2ConstPtr;
     typedef std::function<void(const vector<T1ConstPtr> &,
@@ -206,9 +208,12 @@ namespace flex_sync {
   
   /* -------------------------- 3 different types ----------------- */
   
-  template <class T1, class T2, class T3>
+  template <typename T1, typename T2, typename T3>
   class Sync<T1,T2,T3>: public SyncBase {
   public:
+    typedef T1 Type1;
+    typedef T2 Type2;
+    typedef T3 Type3;
     typedef boost::shared_ptr<T1 const> T1ConstPtr;
     typedef boost::shared_ptr<T2 const> T2ConstPtr;
     typedef boost::shared_ptr<T3 const> T3ConstPtr;
