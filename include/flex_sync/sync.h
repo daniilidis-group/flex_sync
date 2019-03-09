@@ -29,8 +29,10 @@ namespace flex_sync {
     template<class F> using vector = std::vector<F>;
     template<class F, class K> using map = std::map<F, K>;
 
-    SyncBase(int qs) :
-      maxQueueSize_(qs) {
+    SyncBase(int numTopics, int qs) :
+      maxQueueSize_(qs),
+      topicsVec_(numTopics)
+      {
     }
 
     virtual ~SyncBase() {};
@@ -122,7 +124,7 @@ namespace flex_sync {
     typedef std::function<void(const vector<T1ConstPtr> &)> Callback;
     
     Sync(const vector<vector<string>> &topics, const Callback &callback,
-         unsigned int qs = 5) : SyncBase(qs),
+         unsigned int qs = 5) : SyncBase(1, qs),
                                 callback_(callback)  {
       // initialize time-to-message maps for each topic
       if (topics.size() != 1) {
@@ -171,7 +173,7 @@ namespace flex_sync {
     Sync(const vector<vector<string>> &topics,
           const Callback &callback,
           unsigned int maxQueueSize = 5) :
-      SyncBase(maxQueueSize),
+      SyncBase(2, maxQueueSize),
       callback_(callback) {
       // initialize time-to-message maps for each topic
       if (topics.size() != 2) {
@@ -234,7 +236,7 @@ namespace flex_sync {
     Sync(const vector<vector<string>> &topics,
           const Callback &callback,
           unsigned int maxQueueSize = 5) :
-      SyncBase(maxQueueSize),
+      SyncBase(3, maxQueueSize),
       callback_(callback) {
       // initialize time-to-message maps for each topic
       if (topics.size() != 3) {
