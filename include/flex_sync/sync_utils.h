@@ -46,7 +46,7 @@ namespace flex_sync {
   }
 
   // helper function to update the message count in map
-  static std::map<ros::Time, int>::iterator update_count(
+  static inline std::map<ros::Time, int>::iterator update_count(
     const ros::Time &t, std::map<ros::Time, int> *msgCountMap) {
     // check if we have this time stamp
     std::map<ros::Time, int>::iterator it = msgCountMap->find(t);
@@ -58,8 +58,9 @@ namespace flex_sync {
     }
     return (it);
   }
+
   // helper function to drop message
-  static void decrease_count(const ros::Time &t,
+  static inline void decrease_count(const ros::Time &t,
                              std::map<ros::Time, int> *msgCountMap) {
     // check if we have this time stamp
     std::map<ros::Time, int>::iterator it = msgCountMap->find(t);
