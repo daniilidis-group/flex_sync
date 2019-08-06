@@ -47,6 +47,9 @@ namespace flex_sync {
     }
 
     unsigned int qs() const { return (maxQueueSize_); }
+    unsigned int getNumberDropped() const { return (numDropped_); }
+
+    void clearNumberDropped() { numDropped_ = 0; }
 
     virtual void publishMessages(const Time &t) = 0;
 
@@ -84,6 +87,7 @@ namespace flex_sync {
         auto it = q.begin();
         decrease_count(it->first, &msgCount_);
         q.erase(it);
+        numDropped_++;
       }
       q.insert(typename map<Time, P>::value_type(t, msg));
       // update the map that counts how many
@@ -109,6 +113,7 @@ namespace flex_sync {
     vector<vector<string>>  topicsVec_;
     Time            currentTime_{0.0};
     CountMap        msgCount_;
+    unsigned int    numDropped_{0};
     mutable std::mutex      mutex_;
   };
 
