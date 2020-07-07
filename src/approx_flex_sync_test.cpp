@@ -81,13 +81,13 @@ int main(int argc, char** argv) {
   ros::NodeHandle pnh("~");
 
   try {
-    ros::Time t0 = ros::Time::now();
+    //ros::Time t0 = ros::Time::now();
     // test Sync
     vector<vector<string>> topics(1);
     topics[0].push_back("/topic/foo1");
     boost::shared_ptr<TestMsg1> msg(new TestMsg1());
     std::cout << "creating GeneralSync<TestMsg1> " << std::endl;
-    flex_sync::GeneralSync<TestMsg1> sync(topics, callback1);
+    flex_sync::GeneralSync<TestMsg1> sync(topics, callback1, 10);
     sync.process<boost::shared_ptr<const TestMsg1>>(topics[0][0], msg);
 
     // test Sync2
@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     topics[1].push_back("left_tof");
     topics[1].push_back("right_tof");
     std::cout << "creating GeneralSync<TestMsg1, TestMsg2> " << std::endl;
-    flex_sync::GeneralSync<TestMsg1, TestMsg2> sync2(topics, callback2);
+    flex_sync::GeneralSync<TestMsg1, TestMsg2> sync2(topics, callback2, 10);
     flex_sync::TestData db2(topics, "../test_data");
     db2.play(&sync2);
 
