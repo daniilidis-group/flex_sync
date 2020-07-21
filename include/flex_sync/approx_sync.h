@@ -63,6 +63,10 @@ namespace flex_sync {
                 Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
       totalNumCallback_ = for_each(maps_, MapInitializer());
+      has_dropped_messages_.resize(topics.size());
+      for (size_t i_type = 0; i_type < topics.size(); i_type++) {
+        has_dropped_messages_[i_type].resize(topics[i_type].size(), false);
+      }
       std::cout << "total num cb args: " << totalNumCallback_ << std::endl;
     }
 
@@ -124,6 +128,27 @@ namespace flex_sync {
       }
     }
 
+    struct CandidateMaker {
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) const {
+          int num_cb_vals_found = 0;
+          for (size_t topic_idx = 0;
+               topic_idx < sync->topics_[I].size(); topic_idx++) {
+            const std::string &topic = sync->topics_[I][topic_idx];
+            auto &deque = std::get<I>(sync->maps_)[topic].deque;
+            if (deque.empty()) {
+              std::get<I>(sync->cba_)[topic_idx] = deque.back();
+              num_cb_vals_found++;
+            }
+          }
+          return (num_cb_vals_found);
+        }
+    };
+
+    void makeCandidate() {
+      int num_good = for_each(maps_, CandidateMaker());
+    }
+
     void fake_update() {
       std::cout << "fake update!" << std::endl;
       return;
@@ -137,10 +162,19 @@ namespace flex_sync {
       }
     };
 
+    struct FullIndex {
+      FullIndex(int32_t tp = -1, int32_t tc = -1): type(tp), topic(tc) {};
+      bool operator==(const FullIndex &a) {
+        return (type == a.type && topic == a.topic);
+      };
+      int32_t type;
+      int32_t topic;
+    };
+ 
     class CandidateBoundaryFinder {
     public:
       CandidateBoundaryFinder(bool end) :
-        typeIndex_(-1), topicIndex_(-1), end_(end) {
+        end_(end) {
         time_ = end_ ? ros::Time(0, 1) : ros::Time(std::numeric_limits< uint32_t >::max(), 999999999);
       };
       template<std::size_t I>
@@ -164,54 +198,71 @@ namespace flex_sync {
           const auto &m = deque.front();
           if ((m->header.stamp < time_) ^ end_) {
             time_ = m->header.stamp;
-            typeIndex_ = I;
-            topicIndex_ = topicIdx;
+            index_.type = I;
+            index_.topic = topicIdx;
           }
           topicIdx++;
           num_deques_found++;
         }
         return (num_deques_found);
       }
-      int32_t getTypeIndex() const { return (typeIndex_); }
-      int32_t getTopicIndex() const { return (topicIndex_); }
+      const FullIndex &getIndex() const { return (index_); }
       ros::Time getTime() const { return (time_); }
       
     private:
-      int32_t typeIndex_;
-      int32_t topicIndex_;
+      FullIndex index_;
       ros::Time time_;
       bool  end_;
     };
 
-    void getCandidateBoundary(uint32_t *index, ros::Time *time, bool end) {
+    void getCandidateBoundary(FullIndex *index,
+                              ros::Time *time, bool end) {
       CandidateBoundaryFinder cbf(end);
       const int num_deques = for_each(maps_, cbf);
-      *index = (uint32_t) cbf.getTopicIndex();
+      *index = cbf.getIndex();
       *time  = cbf.getTime();
       std::cout << "cand bound num_deques: " << num_deques << std::endl;
+    }
+    // Assumes: all deques are non empty
+    // Returns: the oldest message on the deques
+    void getCandidateStart(FullIndex *start_index,
+                           ros::Time *start_time)  {
+      return getCandidateBoundary(start_index, start_time, false);
+    }
+
+    // Assumes: all deques are non empty
+    // Returns: the latest message among the heads of the deques,
+    // i.e. the minimum time to end an interval started at
+    // getCandidateStart_index()
+    void getCandidateEnd(FullIndex *end_index, ros::Time *end_time) {
+      return getCandidateBoundary(end_index, end_time, true);
     }
 
 
     void update()  {
-      uint32_t index;
+      FullIndex index;
       ros::Time t;
       // get start time
-      getCandidateBoundary(&index, &t, false);
-/*      
+      getCandidateStart(&index, &t);
+
       // While no deque is empty
-      while (num_non_empty_deques_ == tot_num_deques) {
+      while (num_non_empty_deques_ == tot_num_deques_) {
         // Find the start and end of the current interval
         ros::Time end_time, start_time;
-        uint32_t end_index, start_index;
-        getCandidateEnd(end_index, end_time);
-        getCandidateStart(start_index, start_time);
-        for (uint32_t i = 0; i < (uint32_t)RealTypeCount::value; i++)  {
-          if (i != end_index)  {
-            // No dropped message could have been better to use than the ones we have,
-            // so it becomes ok to use this topic as pivot in the future
-            has_dropped_messages_[i] = false;
+        FullIndex end_index, start_index;
+        getCandidateEnd(&end_index, &end_time);
+        getCandidateStart(&start_index, &start_time);
+        for (int i_t = 0; i_t < (int)has_dropped_messages_.size(); i_t++) {
+          for (int j = 0; j < (int)has_dropped_messages_[i_t].size(); j++) {
+            if (!((i_t == end_index.type) && (j == end_index.topic))) {
+              // No dropped message could have been better to use than
+              // the ones we have, so it becomes ok to use this topic
+              // as pivot in the future
+              has_dropped_messages_[i_t][j] = false;
+            }
           }
         }
+        /*
         if (pivot_ == NO_PIVOT) {
           // We do not have a candidate
           // INVARIANT: the past_ vectors are empty
@@ -233,7 +284,8 @@ namespace flex_sync {
           pivot_ = end_index;
           pivot_time_ = end_time;
           dequeMoveFrontToPast(start_index);
-        }  else {
+        }
+        else {
           // We already have a candidate
           // Is this one better than the current candidate?
           // INVARIANT: has_dropped_messages_ is all false
@@ -307,11 +359,12 @@ namespace flex_sync {
             num_virtual_moves[start_index]++;
           } // while(1)
         }
-        } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
 */
-        }
+      } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
+    }
  
   private:
+    inline static const FullIndex NO_PIVOT;
     TupleOfMaps maps_;
     std::vector<std::vector<std::string>> topics_;
     Callback cb_;
@@ -320,6 +373,9 @@ namespace flex_sync {
     int num_non_empty_deques_{0};
     int tot_num_deques_{0};
     size_t queue_size_;
+    std::vector<std::vector<bool>> has_dropped_messages_;
+    FullIndex pivot_{NO_PIVOT};
+    ros::Duration max_interval_duration_{ros::DURATION_MAX}; // TODO: actually
   };
 }
 
