@@ -22,19 +22,41 @@
 
 namespace flex_sync {
 
+  // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements-type
+  template <class T, class Tuple>
+  struct Index;
+
+  template <class T, class... Types>
+  struct Index<T, std::tuple<T, Types...>> {
+    static const std::size_t value = 0;
+  };
+
+  template <class T, class U, class... Types>
+  struct Index<T, std::tuple<U, Types...>> {
+    static const std::size_t value = 1 + Index<T, std::tuple<Types...>>::value;
+  };
+
   //
   template <typename MsgType>
-  using TypeDeque = std::deque<boost::shared_ptr<MsgType>>;
+  using TopicDeque = std::deque<boost::shared_ptr<MsgType>>;
   template <typename MsgType>
-  using TypeVec = std::vector<boost::shared_ptr<MsgType>>;
+  using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
+  template <typename MsgType>
+  struct TopicInfo {
+    TopicDeque<MsgType> deque;
+    TopicVec<MsgType> past;
+  };
+  // TODO: learn how to do this correctly, w/o inheritance
+  template <typename MsgType>
+  struct TopicInfoVector: public std::vector<TopicInfo<MsgType>> {
+  };
+  // TypeInfo holds all deques and maps
+  // for a particular message type
   template <typename MsgType>
   struct TypeInfo {
-    TypeDeque<MsgType> deque;
-    TypeVec<MsgType> past;
-  };
-  //
-  template <typename MsgType>
-  struct TopicMap: public std::map<std::string, TypeInfo<MsgType>> {
+    TopicInfoVector<MsgType>   topic_info;
+    std::vector<bool>          has_dropped_messages;
+    std::map<std::string, int> topic_to_index;
   };
   template <typename ... MsgTypes>
   class GeneralSync {
@@ -42,7 +64,7 @@ namespace flex_sync {
     // parameter.
     typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...> CallbackArg;
     typedef std::function<void(const std::vector<boost::shared_ptr<const MsgTypes>>& ...)> Callback;
-    typedef std::tuple<TopicMap<const MsgTypes>...> TupleOfMaps;
+    typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
     
   public:
     template<std::size_t I = 0, typename FuncT, typename... Tp>
@@ -62,25 +84,27 @@ namespace flex_sync {
     GeneralSync(const std::vector<std::vector<std::string>> &topics,
                 Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
-      totalNumCallback_ = for_each(maps_, MapInitializer());
-      has_dropped_messages_.resize(topics.size());
-      for (size_t i_type = 0; i_type < topics.size(); i_type++) {
-        has_dropped_messages_[i_type].resize(topics[i_type].size(), false);
-      }
+      totalNumCallback_ = for_each(type_infos_, TopicInfoInitializer());
       std::cout << "total num cb args: " << totalNumCallback_ << std::endl;
     }
 
-    struct MapInitializer {
+    struct TopicInfoInitializer {
       template<std::size_t I>
       int operate(GeneralSync<MsgTypes ...> *sync) const
         {
           const int n_topic = sync->topics_[I].size();
           std::cout << "initializing type: " << I << " with " << n_topic << " topics " << std::endl;
           std::get<I>(sync->cba_).resize(n_topic);
-          for (const auto &topic: sync->topics_[I]) {          
-            std::get<I>(sync->maps_)[topic] = typename std::tuple_element<I, TupleOfMaps>::type::mapped_type();
-            sync->tot_num_deques_++;
-          };
+          const size_t num_topics = sync->topics_[I].size();
+          auto &type_info = std::get<I>(sync->type_infos_);
+          type_info.topic_info.resize(num_topics);
+          sync->tot_num_deques_ += num_topics;
+          // make map between topic string and index for
+          // lookup when data arrives
+          for (int t_idx = 0; t_idx < (int) sync->topics_[I].size(); t_idx++) {
+            type_info.topic_to_index[sync->topics_[I][t_idx]] = t_idx;
+          }
+          type_info.has_dropped_messages.resize(num_topics, false);
           return (n_topic);
         }
     };
@@ -92,7 +116,7 @@ namespace flex_sync {
           int num_cb_vals_found = 0;
           for (size_t topic_idx = 0; topic_idx < sync->topics_[I].size(); topic_idx++) {
             const std::string &topic = sync->topics_[I][topic_idx];
-            auto &deque = std::get<I>(sync->maps_)[topic].deque;
+            auto &deque = std::get<I>(sync->type_infos_)[topic].deque;
             if (deque.empty()) {
               std::get<I>(sync->cba_)[topic_idx] = deque.back();
               num_cb_vals_found++;
@@ -104,25 +128,26 @@ namespace flex_sync {
 
     template<typename MsgPtrT>
     void process(const std::string &topic, const MsgPtrT &msg) {
-      typedef TopicMap<typename MsgPtrT::element_type const> MapT;
-      MapT &m = std::get<MapT>(maps_);
+      typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
+      //constexpr std::size_t idx = Index<TypeInfoT, TupleOfTypeInfo>::value;
+      TypeInfoT &ti = std::get<TypeInfoT>(type_infos_);
       // m[topic] = TimeToTypePtrMap<typename MsgPtrT::element_type const>();
-      auto topic_it = m.find(topic);
-      if (topic_it == m.end()) {
+      auto topic_it = ti.topic_to_index.find(topic);
+      if (topic_it == ti.topic_to_index.end()) {
         std::cerr << "flex_sync: invalid topic for type " << topic << std::endl;
         return;
       }
       const auto &stamp = msg->header.stamp;
-      auto &topicInfo = topic_it->second;
-      topicInfo.deque.push_back(msg);
+      auto &topic_info = ti.topic_info[topic_it->second];
+      topic_info.deque.push_back(msg);
       std::cout << "added message: " << topic << " time: " << stamp << std::endl;
-      if (topicInfo.deque.size() == 1ul) {
+      if (topic_info.deque.size() == 1ul) {
         ++num_non_empty_deques_;
         if (num_non_empty_deques_ == tot_num_deques_) {
           update(); // all deques have messages, go for it
         }
       }
-      if (topicInfo.deque.size() + topicInfo.past.size() > queue_size_) {
+      if (topic_info.deque.size() + topic_info.past.size() > queue_size_) {
         std::cout << "PROBLEM: queue overflow!!!" << std::endl;
         assert(0);
       }
@@ -135,7 +160,7 @@ namespace flex_sync {
           for (size_t topic_idx = 0;
                topic_idx < sync->topics_[I].size(); topic_idx++) {
             const std::string &topic = sync->topics_[I][topic_idx];
-            auto &deque = std::get<I>(sync->maps_)[topic].deque;
+            auto &deque = std::get<I>(sync->type_infos_)[topic].deque;
             if (deque.empty()) {
               std::get<I>(sync->cba_)[topic_idx] = deque.back();
               num_cb_vals_found++;
@@ -146,14 +171,14 @@ namespace flex_sync {
     };
 
     void makeCandidate() {
-      int num_good = for_each(maps_, CandidateMaker());
+      int num_good = for_each(type_infos_, CandidateMaker());
     }
 
     void fake_update() {
       std::cout << "fake update!" << std::endl;
       return;
       CallbackArg cba;
-      int num_good = for_each(maps_, MapUpdater());
+      int num_good = for_each(type_infos_, MapUpdater());
       // deliver callback
       // this requires C++17
       std::cout << " num good: " << num_good << std::endl;
@@ -171,6 +196,26 @@ namespace flex_sync {
       int32_t topic;
     };
  
+    class DroppedMessageUpdater {
+    public:
+      DroppedMessageUpdater(const FullIndex &end): end_index_(end) {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (int j = 0; j < (int)type_info.has_dropped_messages.size(); j++) {
+          if (!((I == end_index_.type) && (j == end_index_.topic))) {
+            // No dropped message could have been better to use than
+            // the ones we have, so it becomes ok to use this topic
+            // as pivot in the future
+            type_info.has_dropped_messages[j] = false;
+          }
+        }
+        return (0);
+      }
+    private:
+      FullIndex end_index_;
+    };
+
     class CandidateBoundaryFinder {
     public:
       CandidateBoundaryFinder(bool end) :
@@ -181,15 +226,9 @@ namespace flex_sync {
       int operate(GeneralSync<MsgTypes ...> *sync) {
         int num_deques_found = 0;
         int topicIdx = 0;
-        const auto &topicMap = std::get<I>(sync->maps_);
-        for (size_t topic_idx = 0; topic_idx < sync->topics_[I].size(); topic_idx++) {
-          const std::string &topic = sync->topics_[I][topic_idx];
-          const auto map_it = topicMap.find(topic);
-          if (map_it == topicMap.end()) {
-            std::cerr << "ERROR: topic " << topic << " not found for type " << I << std::endl;
-            ROS_ASSERT(map_it != topicMap.end());
-          }
-          const auto &deque = map_it->second.deque;
+        const auto &type_info = std::get<I>(sync->type_infos_);
+        for (const auto &ti: type_info.topic_info) {
+          const auto &deque = ti.deque;
           if (deque.empty()) {
             std::cerr << "ERROR: deque " << I << " cannot be empty!" << std::endl;
             ROS_ASSERT(!deque.empty());
@@ -218,7 +257,7 @@ namespace flex_sync {
     void getCandidateBoundary(FullIndex *index,
                               ros::Time *time, bool end) {
       CandidateBoundaryFinder cbf(end);
-      const int num_deques = for_each(maps_, cbf);
+      const int num_deques = for_each(type_infos_, cbf);
       *index = cbf.getIndex();
       *time  = cbf.getTime();
       std::cout << "cand bound num_deques: " << num_deques << std::endl;
@@ -252,16 +291,9 @@ namespace flex_sync {
         FullIndex end_index, start_index;
         getCandidateEnd(&end_index, &end_time);
         getCandidateStart(&start_index, &start_time);
-        for (int i_t = 0; i_t < (int)has_dropped_messages_.size(); i_t++) {
-          for (int j = 0; j < (int)has_dropped_messages_[i_t].size(); j++) {
-            if (!((i_t == end_index.type) && (j == end_index.topic))) {
-              // No dropped message could have been better to use than
-              // the ones we have, so it becomes ok to use this topic
-              // as pivot in the future
-              has_dropped_messages_[i_t][j] = false;
-            }
-          }
-        }
+        DroppedMessageUpdater dmu(end_index);
+        (void) for_each(type_infos_, dmu);
+      } // should go
         /*
         if (pivot_ == NO_PIVOT) {
           // We do not have a candidate
@@ -360,12 +392,12 @@ namespace flex_sync {
           } // while(1)
         }
 */
-      } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
-    }
+  } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
  
   private:
     inline static const FullIndex NO_PIVOT;
-    TupleOfMaps maps_;
+    TupleOfTypeInfo type_infos_;
+    
     std::vector<std::vector<std::string>> topics_;
     Callback cb_;
     CallbackArg cba_;
@@ -373,7 +405,6 @@ namespace flex_sync {
     int num_non_empty_deques_{0};
     int tot_num_deques_{0};
     size_t queue_size_;
-    std::vector<std::vector<bool>> has_dropped_messages_;
     FullIndex pivot_{NO_PIVOT};
     ros::Duration max_interval_duration_{ros::DURATION_MAX}; // TODO: actually
   };
