@@ -94,7 +94,7 @@ namespace flex_sync {
         {
           const int n_topic = sync->topics_[I].size();
           std::cout << "initializing type: " << I << " with " << n_topic << " topics " << std::endl;
-          std::get<I>(sync->cba_).resize(n_topic);
+          std::get<I>(sync->candidate_).resize(n_topic);
           const size_t num_topics = sync->topics_[I].size();
           auto &type_info = std::get<I>(sync->type_infos_);
           type_info.topic_info.resize(num_topics);
@@ -157,21 +157,19 @@ namespace flex_sync {
       template<std::size_t I>
       int operate(GeneralSync<MsgTypes ...> *sync) const {
           int num_cb_vals_found = 0;
-          for (size_t topic_idx = 0;
-               topic_idx < sync->topics_[I].size(); topic_idx++) {
-            const std::string &topic = sync->topics_[I][topic_idx];
-            auto &deque = std::get<I>(sync->type_infos_)[topic].deque;
-            if (deque.empty()) {
-              std::get<I>(sync->cba_)[topic_idx] = deque.back();
-              num_cb_vals_found++;
-            }
+          auto &type_info = std::get<I>(sync->type_infos_);
+          for (size_t i = 0; i < type_info.topic_info.size(); i++) {
+            auto &ti = type_info.topic_info[i];
+            auto &deque = ti.deque;
+            std::get<I>(sync->candidate_)[i] = deque.front();
+            num_cb_vals_found++;
           }
           return (num_cb_vals_found);
         }
     };
 
     void makeCandidate() {
-      int num_good = for_each(type_infos_, CandidateMaker());
+      (void) for_each(type_infos_, CandidateMaker());
     }
 
     void fake_update() {
@@ -183,7 +181,7 @@ namespace flex_sync {
       // this requires C++17
       std::cout << " num good: " << num_good << std::endl;
       if (num_good == totalNumCallback_) {
-        std::apply([this](auto &&... args) { cb_(args...); }, cba_);
+        std::apply([this](auto &&... args) { cb_(args...); }, candidate_);
       }
     };
 
@@ -192,13 +190,15 @@ namespace flex_sync {
       bool operator==(const FullIndex &a) {
         return (type == a.type && topic == a.topic);
       };
+      bool isValid() const { return(type != -1 && topic != -1); };
       int32_t type;
       int32_t topic;
     };
  
     class DroppedMessageUpdater {
     public:
-      DroppedMessageUpdater(const FullIndex &end): end_index_(end) {};
+      DroppedMessageUpdater(const FullIndex &end):
+        end_index_(end), has_dropped_messages_(false) {};
       template<std::size_t I>
       int operate(GeneralSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
@@ -208,12 +208,19 @@ namespace flex_sync {
             // the ones we have, so it becomes ok to use this topic
             // as pivot in the future
             type_info.has_dropped_messages[j] = false;
+          } else {
+            // capture whether the end_index has dropped messages
+            has_dropped_messages_ = type_info.has_dropped_messages[j];
           }
         }
         return (0);
       }
+      bool endIndexHasDroppedMessages() const {
+        return (has_dropped_messages_);
+      }
     private:
       FullIndex end_index_;
+      bool      has_dropped_messages_{false};
     };
 
     class CandidateBoundaryFinder {
@@ -277,6 +284,58 @@ namespace flex_sync {
       return getCandidateBoundary(end_index, end_time, true);
     }
 
+    class DequeFrontDeleter {
+    public:
+      DequeFrontDeleter(const FullIndex &index): index_(index) {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        if (I == index_.type) {
+          auto &deque = type_info.topic_info[index_.topic].deque;
+          assert(!deque.empty());
+          deque.pop_front();
+          if (deque.empty()) {
+            --sync->num_non_empty_deques_;
+          }
+        }
+        return (0);
+      }
+    private:
+      FullIndex index_;
+    };
+  
+    void dequeDeleteFront(const FullIndex &index) {
+      DequeFrontDeleter dfd(index);
+      (void) for_each(type_infos_, dfd);
+    }
+
+    class DequeMoverFrontToPast {
+    public:
+      DequeMoverFrontToPast(const FullIndex &index): index_(index) {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        if (I == index_.type) {
+          auto &deque = type_info.topic_info[index_.topic].deque;
+          auto &past = type_info.topic_info[index_.topic].past;
+          assert(!deque.empty());
+          past.push_back(deque.front());
+          deque.pop_front();
+          if (deque.empty()) {
+            --sync->num_non_empty_deques_;
+          }
+        }
+        return (0);
+      }
+    private:
+      FullIndex index_;
+    };
+  
+    // Assumes that deque number <index> is non empty
+    void dequeMoveFrontToPast(const FullIndex &index) {
+      DequeMoverFrontToPast dmfp(index);
+      (void) for_each(type_infos_, dmfp);
+    }
 
     void update()  {
       FullIndex index;
@@ -287,36 +346,37 @@ namespace flex_sync {
       // While no deque is empty
       while (num_non_empty_deques_ == tot_num_deques_) {
         // Find the start and end of the current interval
-        ros::Time end_time, start_time;
         FullIndex end_index, start_index;
-        getCandidateEnd(&end_index, &end_time);
-        getCandidateStart(&start_index, &start_time);
+        getCandidateEnd(&end_index, &end_time_);
+        getCandidateStart(&start_index, &start_time_);
         DroppedMessageUpdater dmu(end_index);
         (void) for_each(type_infos_, dmu);
-      } // should go
-        /*
-        if (pivot_ == NO_PIVOT) {
+        if (!pivot_.isValid()) {
           // We do not have a candidate
           // INVARIANT: the past_ vectors are empty
           // INVARIANT: (candidate_ has no filled members)
-          if (end_time - start_time > max_interval_duration_) {
-            // This interval is too big to be a valid candidate, move to the next
+          if (end_time_ - start_time_ > max_interval_duration_) {
+            // This interval is too big to be a valid candidate,
+            // move to the next
             dequeDeleteFront(start_index);
             continue;
           }
-          if (has_dropped_messages_[end_index]) {
-            // The topic that would become pivot has dropped messages, so it is not a good pivot
+          if (dmu.endIndexHasDroppedMessages()) {
+            // The topic that would become pivot has dropped messages,
+            // so it is not a good pivot
             dequeDeleteFront(start_index);
             continue;
           }
           // This is a valid candidate, and we don't have any, so take it
           makeCandidate();
-          candidate_start_ = start_time;
-          candidate_end_ = end_time;
+          candidate_start_ = start_time_;
+          candidate_end_ = end_time_;
           pivot_ = end_index;
-          pivot_time_ = end_time;
+          pivot_time_ = end_time_;
           dequeMoveFrontToPast(start_index);
         }
+        /*
+
         else {
           // We already have a candidate
           // Is this one better than the current candidate?
@@ -392,7 +452,8 @@ namespace flex_sync {
           } // while(1)
         }
 */
-  } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
+        } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
+        } // end of update()
  
   private:
     inline static const FullIndex NO_PIVOT;
@@ -400,12 +461,17 @@ namespace flex_sync {
     
     std::vector<std::vector<std::string>> topics_;
     Callback cb_;
-    CallbackArg cba_;
+    CallbackArg candidate_;
     int totalNumCallback_{0};
     int num_non_empty_deques_{0};
     int tot_num_deques_{0};
     size_t queue_size_;
-    FullIndex pivot_{NO_PIVOT};
+    ros::Time start_time_;
+    ros::Time end_time_;
+    FullIndex pivot_;
+    ros::Time pivot_time_;
+    ros::Time candidate_start_;
+    ros::Time candidate_end_;
     ros::Duration max_interval_duration_{ros::DURATION_MAX}; // TODO: actually
   };
 }
