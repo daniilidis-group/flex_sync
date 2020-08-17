@@ -45,6 +45,8 @@ namespace flex_sync {
   struct TopicInfo {
     TopicDeque<MsgType> deque;
     TopicVec<MsgType> past;
+    ros::Duration inter_message_lower_bound{ros::Duration(0)};
+    uint32_t  num_virtual_moves{0};
   };
   // TODO: learn how to do this correctly, w/o inheritance
   template <typename MsgType>
@@ -284,6 +286,70 @@ namespace flex_sync {
       return getCandidateBoundary(end_index, end_time, true);
     }
 
+    class VirtualCandidateBoundaryFinder {
+    public:
+      VirtualCandidateBoundaryFinder() :
+        start_time_(ros::Time(std::numeric_limits< uint32_t >::max(),
+                              999999999)),
+        end_time_(ros::Time(0, 1)) {
+      };
+
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        int num_deques_found = 0;
+        const auto &type_info = std::get<I>(sync->type_infos_);
+        assert(sync->pivot_.isValid());
+        for (size_t topicIdx = 0; topicIdx < type_info.topic_info.size();
+             topicIdx++) {
+          const auto &ti = type_info.topic_info[topicIdx];
+          const auto &deque = ti.deque;
+          const auto &past = ti.deque;
+          // get virtual time
+          ros::Time virtual_time;
+          if (deque.empty()) {
+            assert(!past.empty()); // Because we have a candidate
+            const ros::Time last_msg_time = past.back()->header.stamp;
+            const ros::Time msg_time_lower_bound = last_msg_time +
+              ti.inter_message_lower_bound;
+            virtual_time = std::max(msg_time_lower_bound, sync->pivot_time_);
+          } else {
+            virtual_time = deque.front()->header.stamp;
+          }
+          if (virtual_time < start_time_) {
+            start_time_ = virtual_time;
+            start_index_ = FullIndex(I, topicIdx);
+          }
+          if (virtual_time > end_time_) {
+            end_time_ = virtual_time;
+            end_index_ = FullIndex(I, topicIdx);
+          }
+          num_deques_found++;
+        }
+        return (num_deques_found);
+      }
+      ros::Time getStartTime() const { return (start_time_); }
+      ros::Time getEndTime() const { return (end_time_); }
+      FullIndex getStartIndex() const { return (start_index_); }
+      FullIndex getEndIndex() const { return (end_index_); }
+    private:
+      FullIndex start_index_;
+      ros::Time start_time_;
+      FullIndex end_index_;
+      ros::Time end_time_;
+    };
+
+    void getVirtualCandidateBoundary(FullIndex *start_index,
+                                     ros::Time *start_time,
+                                     FullIndex *end_index,
+                                     ros::Time *end_time) {
+      VirtualCandidateBoundaryFinder vcbf;
+      (void) for_each(type_infos_, vcbf);
+      *start_index = vcbf.getStartIndex();
+      *start_time  = vcbf.getStartTime();
+      *end_index = vcbf.getEndIndex();
+      *end_time  = vcbf.getEndTime();
+    }
+
     class DequeFrontDeleter {
     public:
       DequeFrontDeleter(const FullIndex &index): index_(index) {};
@@ -311,30 +377,110 @@ namespace flex_sync {
 
     class DequeMoverFrontToPast {
     public:
-      DequeMoverFrontToPast(const FullIndex &index): index_(index) {};
+      DequeMoverFrontToPast(const FullIndex &index,
+                            bool updateVirtualMoves):
+        index_(index), update_virtual_moves_(updateVirtualMoves) {};
       template<std::size_t I>
       int operate(GeneralSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         if (I == index_.type) {
-          auto &deque = type_info.topic_info[index_.topic].deque;
-          auto &past = type_info.topic_info[index_.topic].past;
+          auto &ti = type_info.topic_info[index_.topic];
+          auto &deque = ti.deque;
+          auto &past = ti.past;
           assert(!deque.empty());
           past.push_back(deque.front());
           deque.pop_front();
           if (deque.empty()) {
-            --sync->num_non_empty_deques_;
+            --(sync->num_non_empty_deques_);
+          }
+          if (update_virtual_moves_) {
+            ti.num_virtual_moves++;
           }
         }
         return (0);
       }
     private:
       FullIndex index_;
+      bool      update_virtual_moves_{false};
     };
   
     // Assumes that deque number <index> is non empty
     void dequeMoveFrontToPast(const FullIndex &index) {
-      DequeMoverFrontToPast dmfp(index);
+      DequeMoverFrontToPast dmfp(index, false);
       (void) for_each(type_infos_, dmfp);
+    }
+
+    class RecoverAndDelete {
+    public:
+      RecoverAndDelete() {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          auto &deque = ti.deque;
+          auto &past  = ti.past;
+          while (!past.empty()) {
+            deque.push_front(past.back());
+            past.pop_back();
+          }
+          assert (!deque.empty());
+          deque.pop_front();
+          if (!deque.empty()) {
+            ++(sync->num_non_empty_deques_);
+          }
+        }
+        return (0);
+      }
+    };
+
+    void recoverAndDelete() {
+      RecoverAndDelete rnd;
+      (void) for_each(type_infos_, rnd);
+    }
+
+    class ResetNumVirtualMoves {
+    public:
+      ResetNumVirtualMoves() {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          ti.num_virtual_moves = 0;
+        }
+        return (0);
+      }
+    };
+
+    class Recover {
+    public:
+      Recover() {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          for (uint32_t n = ti.num_virtual_moves; n != 0; n--) {
+            ti.deque.push_front(ti.past.back());
+            ti.past.pop_back();
+          }
+          if (!ti.deque.empty()) {
+            sync->num_non_empty_deques_++;
+          }
+        }
+        return (0);
+      }
+    };
+
+
+    // Assumes: all deques are non empty now
+    void publishCandidate() {
+      printf("Publishing candidate\n");
+      std::apply([this](auto &&... args) { cb_(args...); }, candidate_);
+      // candidate_ = Tuple(); no needed
+      pivot_ = FullIndex(); // reset to invalid
+      // Recover hidden messages, and delete the ones
+      // corresponding to the candidate
+      num_non_empty_deques_ = 0; // We will recompute it from scratch
+      recoverAndDelete();
     }
 
     void update()  {
@@ -374,86 +520,86 @@ namespace flex_sync {
           pivot_ = end_index;
           pivot_time_ = end_time_;
           dequeMoveFrontToPast(start_index);
-        }
-        /*
-
-        else {
+        }  else {
           // We already have a candidate
           // Is this one better than the current candidate?
           // INVARIANT: has_dropped_messages_ is all false
-          if ((end_time - candidate_end_) * (1 + age_penalty_) >= (start_time - candidate_start_)) {
+          if ((end_time_ - candidate_end_) * (1 + age_penalty_) >=
+              (start_time_ - candidate_start_)) {
             // This is not a better candidate, move to the next
             dequeMoveFrontToPast(start_index);
           }  else {
             // This is a better candidate
             makeCandidate();
-            candidate_start_ = start_time;
-            candidate_end_ = end_time;
+            candidate_start_ = start_time_;
+            candidate_end_ = end_time_;
             dequeMoveFrontToPast(start_index);
-            // Keep the same pivot (and pivot time)
           }
         }
         // INVARIANT: we have a candidate and pivot
-        ROS_ASSERT(pivot_ != NO_PIVOT);
+        ROS_ASSERT(pivot_.isValid());
         //printf("start_index == %d, pivot_ == %d\n", start_index, pivot_);
-        if (start_index == pivot_) { // TODO: replace with start_time == pivot_time_
-          // We have exhausted all possible candidates for this pivot, we now can output the best one
+        if (start_index == pivot_) {
+          // TODO: replace with start_time == pivot_time_
+          // We have exhausted all possible candidates for this pivot,
+          // we now can output the best one
           publishCandidate();
-        } else if ((end_time - candidate_end_) * (1 + age_penalty_) >= (pivot_time_ - candidate_start_)) {
-          // We have not exhausted all candidates, but this candidate is already provably optimal
-          // Indeed, any future candidate must contain the interval [pivot_time_ end_time], which
-          // is already too big.
-          // Note: this case is subsumed by the next, but it may save some unnecessary work and
-          //       it makes things (a little) easier to understand
+        } else if ((end_time_ - candidate_end_) * (1 + age_penalty_)
+                   >= (pivot_time_ - candidate_start_)) {
+          // We have not exhausted all candidates,
+          // but this candidate is already provably optimal
+          // Indeed, any future candidate must contain the interval
+          // [pivot_time_ end_time], which is already too big.
+          // Note: this case is subsumed by the next, but it may
+          // save some unnecessary work and
+          // it makes things (a little) easier to understand
           publishCandidate();
-        }  else if (num_non_empty_deques_ < (uint32_t)RealTypeCount::value)  {
-          uint32_t num_non_empty_deques_before_virtual_search = num_non_empty_deques_;
-
-          // Before giving up, use the rate bounds, if provided, to further try to prove optimality
-          std::vector<int> num_virtual_moves(9,0);
+        } else if (num_non_empty_deques_ < tot_num_deques_)  {
+          uint32_t num_non_empty_deques_before_virtual_search =
+            num_non_empty_deques_;
+          (void) for_each(type_infos_, ResetNumVirtualMoves());
           while (1) {
             ros::Time end_time, start_time;
-            uint32_t end_index, start_index;
-            getVirtualCandidateEnd(end_index, end_time);
-            getVirtualCandidateStart(start_index, start_time);
-            if ((end_time - candidate_end_) * (1 + age_penalty_) >= (pivot_time_ - candidate_start_)) {
+            FullIndex end_index, start_index;
+            getVirtualCandidateBoundary(&start_index, &start_time,
+                                        &end_index, &end_time);
+            if ((end_time - candidate_end_) * (1 + age_penalty_) >=
+                (pivot_time_ - candidate_start_)) {
               // We have proved optimality
-              // As above, any future candidate must contain the interval [pivot_time_ end_time], which
-              // is already too big.
-              publishCandidate();  // This cleans up the virtual moves as a byproduct
+              // As above, any future candidate must contain the interval
+              // [pivot_time_ end_time], which is already too big.
+              publishCandidate();  // This cleans virtual moves as a byproduct
               break;  // From the while(1) loop only
             }
-            if ((end_time - candidate_end_) * (1 + age_penalty_) < (start_time - candidate_start_))  {
+            if ((end_time - candidate_end_) * (1 + age_penalty_)
+                < (start_time - candidate_start_))  {
               // We cannot prove optimality
-              // Indeed, we have a virtual (i.e. optimistic) candidate that is better than the current
-              // candidate
+              // Indeed, we have a virtual (i.e. optimistic) candidate
+              // that is better than the current candidate
               // Cleanup the virtual search:
               num_non_empty_deques_ = 0; // We will recompute it from scratch
-              recover<0>(num_virtual_moves[0]);
-              recover<1>(num_virtual_moves[1]);
-              recover<2>(num_virtual_moves[2]);
-              recover<3>(num_virtual_moves[3]);
-              recover<4>(num_virtual_moves[4]);
-              recover<5>(num_virtual_moves[5]);
-              recover<6>(num_virtual_moves[6]);
-              recover<7>(num_virtual_moves[7]);
-              recover<8>(num_virtual_moves[8]);
-              (void)num_non_empty_deques_before_virtual_search; // unused variable warning stopper
-              ROS_ASSERT(num_non_empty_deques_before_virtual_search == num_non_empty_deques_);
+              (void) for_each(type_infos_, Recover());
+              // unused variable warning stopper
+              (void)num_non_empty_deques_before_virtual_search;
+              assert(num_non_empty_deques_before_virtual_search ==
+                     num_non_empty_deques_);
               break;
             }
-            // Note: we cannot reach this point with start_index == pivot_ since in that case we would
-            //       have start_time == pivot_time, in which case the two tests above are the negation
-            //       of each other, so that one must be true. Therefore the while loop always terminates.
-            ROS_ASSERT(start_index != pivot_);
-            ROS_ASSERT(start_time < pivot_time_);
+            // Note: we cannot reach this point with
+            // start_index == pivot_ since in that case we would have
+            // start_time == pivot_time, in which case the two tests
+            // above are the negation of each other, so that one must be true.
+            // Therefore the while loop always terminates.
+            assert(start_index != pivot_);
+            assert(start_time < pivot_time_);
+            // move front to past and update num_virtual_moves
+            (void) for_each(type_infos_,
+                            DequeMoverFrontToPast(start_index, true));
             dequeMoveFrontToPast(start_index);
-            num_virtual_moves[start_index]++;
           } // while(1)
         }
-*/
-        } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
-        } // end of update()
+      } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
+    } // end of update()
  
   private:
     inline static const FullIndex NO_PIVOT;
@@ -473,6 +619,7 @@ namespace flex_sync {
     ros::Time candidate_start_;
     ros::Time candidate_end_;
     ros::Duration max_interval_duration_{ros::DURATION_MAX}; // TODO: actually
+    double age_penalty_{0.1};
   };
 }
 
