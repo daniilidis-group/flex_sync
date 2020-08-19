@@ -6,7 +6,8 @@
 #include <rosbag/view.h>
 
 #include <message_filters/subscriber.h>
-#include <message_filters/time_synchronizer.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
 
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
@@ -47,41 +48,60 @@ int main(int argc, char** argv) {
     
     // Use time synchronizer to make sure we get properly synchronized images
     rosbag::Bag bag;
-    bag.open("test.bag", rosbag::bagmode::Read);
+    std::string bagName;
+    pnh.param<std::string>("bag", bagName, "test.bag");
+
+    bag.open(bagName, rosbag::bagmode::Read);
     rosbag::View view(bag, rosbag::TopicQuery(topics));
     // image subscribers
-    std::map<std::string, std::shared_ptr<BagSubscriber<sensor_msgs::Image>>> img_sub;
+    std::map<std::string,
+             std::shared_ptr<BagSubscriber<sensor_msgs::Image>>> img_sub;
     for (int i = 0; i < 3; i++) {
-      img_sub[topics[i]] = std::make_shared<BagSubscriber<sensor_msgs::Image>>();
+      img_sub[topics[i]] =
+        std::make_shared<BagSubscriber<sensor_msgs::Image>>();
     }
     // camerainfo subscribers
-    std::map<std::string, std::shared_ptr<BagSubscriber<sensor_msgs::CameraInfo>>> caminfo_sub;
+    std::map<std::string,
+             std::shared_ptr<BagSubscriber<sensor_msgs::CameraInfo>>>
+      caminfo_sub;
     for (int i = 3; i < (int)topics.size(); i++) {
-      caminfo_sub[topics[i]] = std::make_shared<BagSubscriber<sensor_msgs::CameraInfo>>();
+      caminfo_sub[topics[i]] =
+        std::make_shared<BagSubscriber<sensor_msgs::CameraInfo>>();
     }
     // synchronizer
-    message_filters::TimeSynchronizer<
+    typedef message_filters::sync_policies::ApproximateTime<
       sensor_msgs::Image, sensor_msgs::Image,
       sensor_msgs::CameraInfo, sensor_msgs::CameraInfo,
-      sensor_msgs::Image, sensor_msgs::CameraInfo>
-      sync(*img_sub[topics[0]], *img_sub[topics[1]], *caminfo_sub[topics[3]], *caminfo_sub[topics[4]],
-           *img_sub[topics[2]], *caminfo_sub[topics[5]],  25);
+      sensor_msgs::Image, sensor_msgs::CameraInfo> SyncPolicy;
+    message_filters::Synchronizer<SyncPolicy>
+      sync(SyncPolicy(25), *img_sub[topics[0]], *img_sub[topics[1]],
+           *caminfo_sub[topics[3]], *caminfo_sub[topics[4]],
+           *img_sub[topics[2]], *caminfo_sub[topics[5]]);
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4, _5, _6));
 
+    uint32_t cnt(0);
     for (rosbag::MessageInstance m: view) {
       sensor_msgs::Image::ConstPtr img = m.instantiate<sensor_msgs::Image>();
       if (img) {
+        std::cout << img->header.stamp << " " << m.getTopic() << std::endl;
         img_sub[m.getTopic()]->newMessage(img);
       } else {
-        sensor_msgs::CameraInfo::ConstPtr cinfo = m.instantiate<sensor_msgs::CameraInfo>();
+        sensor_msgs::CameraInfo::ConstPtr cinfo =
+          m.instantiate<sensor_msgs::CameraInfo>();
         if (cinfo) {
+          std::cout << cinfo->header.stamp << " " << m.getTopic() << std::endl;
           caminfo_sub[m.getTopic()]->newMessage(cinfo);
         }
       }
+      if (++cnt % 1000 == 0) {
+        ROS_INFO("played %10u messages", cnt);
+      }
     }
-    ros::spin();
+    //ros::spin();
   } catch (const std::exception& e) {
     ROS_ERROR("%s: %s", pnh.getNamespace().c_str(), e.what());
   }
+  ROS_INFO("test complete");
+  return (0);
 }
 
