@@ -130,6 +130,7 @@ namespace flex_sync {
 
     template<typename MsgPtrT>
     void process(const std::string &topic, const MsgPtrT &msg) {
+      std::cout << "process: " << topic << " msg: " << msg->header.stamp << std::endl;
       typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
       //constexpr std::size_t idx = Index<TypeInfoT, TupleOfTypeInfo>::value;
       TypeInfoT &ti = std::get<TypeInfoT>(type_infos_);
