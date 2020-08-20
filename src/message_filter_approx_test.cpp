@@ -30,7 +30,10 @@ void callback(
   const sensor_msgs::CameraInfo::ConstPtr &msg3,
   const sensor_msgs::Image::ConstPtr &msg4,
   const sensor_msgs::CameraInfo::ConstPtr &msg5) {
-  std::cout << msg0->header.stamp << " got callback!" << std::endl;
+  std::cout << "got callback: " <<
+    msg0->header.stamp << " " << msg1->header.stamp << " " <<
+    msg2->header.stamp << " " << msg3->header.stamp << " " <<
+    msg4->header.stamp << " " << msg5->header.stamp << std::endl;
 }
 
 int main(int argc, char** argv) {

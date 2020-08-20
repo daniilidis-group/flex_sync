@@ -31,5 +31,9 @@ add_executable(message_filter_approx_test src/message_filter_approx_test.cpp)
 add_dependencies(message_filter_approx_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(message_filter_approx_test ${catkin_LIBRARIES})
 
+add_executable(approx_sync_test src/approx_sync_test.cpp)
+add_dependencies(approx_sync_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(approx_sync_test ${catkin_LIBRARIES})
+
 install(DIRECTORY include/${PROJECT_NAME}/
         DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
