@@ -130,7 +130,7 @@ namespace flex_sync {
 
     template<typename MsgPtrT>
     void process(const std::string &topic, const MsgPtrT &msg) {
-      std::cout << msg->header.stamp << " process " << topic << std::endl;
+      //std::cout << msg->header.stamp << " process " << topic << std::endl;
       typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
       // find correct topic info array via lookup by type 
       TypeInfoT &ti = std::get<TypeInfoT>(type_infos_);
@@ -155,9 +155,9 @@ namespace flex_sync {
       }
       // check for queue overflow and handle if necesary
       if (topic_info.deque.size() + topic_info.past.size() > queue_size_) {
-        std::cout << "queue overflow: " << topic_info.deque.size()
-                  << " + " <<  topic_info.past.size() << " > "
-                  << queue_size_ << std::endl;
+        //         std::cout << "queue overflow: " << topic_info.deque.size()
+        //      << " + " <<  topic_info.past.size() << " > "
+        //        << queue_size_ << std::endl;
         // Cancel ongoing candidate search, if any:
         num_non_empty_deques_ = 0; // We will recompute it from scratch
         Recover rcv;
@@ -548,7 +548,7 @@ namespace flex_sync {
           // INVARIANT: (candidate_ has no filled members)
           // std::cout << "max duration: " << max_interval_duration_ << std::endl;
           // std::cout << start_time << " " << end_time << std::endl;
-          std::cout << (end_time - start_time) << std::endl;
+          // std::cout << (end_time - start_time) << std::endl;
           if (end_time - start_time > max_interval_duration_) {
             // This interval is too big to be a valid candidate,
             // move to the next

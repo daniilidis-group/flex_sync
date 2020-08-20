@@ -58,13 +58,13 @@ int main(int argc, char** argv) {
     for (rosbag::MessageInstance m: view) {
       sensor_msgs::Image::ConstPtr img = m.instantiate<sensor_msgs::Image>();
       if (img) {
-        // std::cout << "bag data: " << img->header.stamp << " " << m.getTopic() << std::endl;
+        std::cout << img->header.stamp << " " << m.getTopic() << std::endl;
         sync2.process(m.getTopic(), img);
       } else {
         sensor_msgs::CameraInfo::ConstPtr cinfo =
           m.instantiate<sensor_msgs::CameraInfo>();
         if (cinfo) {
-          // std::cout << "bag data: " << cinfo->header.stamp << " " << m.getTopic() << std::endl;
+          std::cout << cinfo->header.stamp << " " << m.getTopic() << std::endl;
           sync2.process(m.getTopic(), cinfo);
         }
       }
