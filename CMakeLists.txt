@@ -23,9 +23,9 @@ include_directories(include
 #add_dependencies(${PROJECT_NAME}_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 #target_link_libraries(${PROJECT_NAME}_test ${catkin_LIBRARIES})
 
-add_executable(approx_flex_sync_test src/approx_flex_sync_test.cpp)
-add_dependencies(approx_flex_sync_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(approx_flex_sync_test ${catkin_LIBRARIES})
+#add_executable(approx_flex_sync_test src/approx_flex_sync_test.cpp)
+#add_dependencies(approx_flex_sync_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+#target_link_libraries(approx_flex_sync_test ${catkin_LIBRARIES})
 
 add_executable(message_filter_approx_test src/message_filter_approx_test.cpp)
 add_dependencies(message_filter_approx_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

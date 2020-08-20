@@ -71,14 +71,14 @@ namespace flex_sync {
   public:
     template<std::size_t I = 0, typename FuncT, typename... Tp>
     inline typename std::enable_if<I == sizeof...(Tp), int>::type
-    for_each(std::tuple<Tp...> &, FuncT) // Unused arg needs no name
+    for_each(std::tuple<Tp...> &, FuncT *) // Unused arg needs no name
       { return 0; } // do nothing
 
     template<std::size_t I = 0, typename FuncT, typename... Tp>
     inline typename std::enable_if<I < sizeof...(Tp), int>::type
-    for_each(std::tuple<Tp...>& t, FuncT f)  {
+    for_each(std::tuple<Tp...>& t, FuncT *f)  {
       //std::cout << "operating on I = " << I << std::endl;
-      const int rv = f.template operate<I>(this);
+      const int rv = (*f).template operate<I>(this);
       //std::cout << "rv: " << rv << std::endl;
       return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
     }
@@ -86,7 +86,8 @@ namespace flex_sync {
     GeneralSync(const std::vector<std::vector<std::string>> &topics,
                 Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
-      totalNumCallback_ = for_each(type_infos_, TopicInfoInitializer());
+      TopicInfoInitializer tii;
+      totalNumCallback_ = for_each(type_infos_, &tii);
       std::cout << "total num cb args: " << totalNumCallback_ << std::endl;
     }
 
@@ -129,7 +130,7 @@ namespace flex_sync {
 
     template<typename MsgPtrT>
     void process(const std::string &topic, const MsgPtrT &msg) {
-      std::cout << msg->header.stamp << " process() " << topic << std::endl;
+      std::cout << msg->header.stamp << " process " << topic << std::endl;
       typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
       // find correct topic info array via lookup by type 
       TypeInfoT &ti = std::get<TypeInfoT>(type_infos_);
@@ -139,14 +140,13 @@ namespace flex_sync {
                          topic << " for message type");
         throw std::runtime_error("invalid topic: " + topic);
       }
-      const auto &stamp = msg->header.stamp;
       auto &topic_info = ti.topic_info[topic_it->second];
       // add new message to the deque for this topic
       topic_info.deque.push_back(msg);
       if (topic_info.deque.size() == 1ul) {
         ++num_non_empty_deques_;
-        std::cout << "num non-empty deques: " << num_non_empty_deques_
-                  << " vs total: " << tot_num_deques_ << std::endl;
+        //std::cout << "num non-empty deques: " << num_non_empty_deques_
+        // << " vs total: " << tot_num_deques_ << std::endl;
         if (num_non_empty_deques_ == tot_num_deques_) {
           update(); // all deques have messages, go for it
         }
@@ -160,7 +160,8 @@ namespace flex_sync {
                   << queue_size_ << std::endl;
         // Cancel ongoing candidate search, if any:
         num_non_empty_deques_ = 0; // We will recompute it from scratch
-        (void) for_each(type_infos_, Recover());
+        Recover rcv;
+        (void) for_each(type_infos_, &rcv);
         // Drop the oldest message in the offending topic
         assert(!topic_info.deque.empty());
         topic_info.deque.pop_front();
@@ -190,7 +191,8 @@ namespace flex_sync {
     };
 
     void makeCandidate() {
-      (void) for_each(type_infos_, CandidateMaker());
+      CandidateMaker cm;
+      (void) for_each(type_infos_, &cm);
     }
 
     struct FullIndex {
@@ -212,15 +214,16 @@ namespace flex_sync {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (size_t j = 0; j < type_info.topic_info.size(); j++) {
           auto &topic_info = type_info.topic_info[j];
-          if (!((I == end_index_.type) && (j == end_index_.topic))) {
+          if (!((I == end_index_.type) && (j == (int)end_index_.topic))) {
             // No dropped message could have been better to use than
             // the ones we have, so it becomes ok to use this topic
             // as pivot in the future
-            std::cout << "no dropped_messages: " << I << "," << j << std::endl;
+            // std::cout << "no dropped_messages: " << I << "," << j << std::endl;
             topic_info.has_dropped_messages = false;
           } else {
             // capture whether the end_index has dropped messages
             has_dropped_messages_ = topic_info.has_dropped_messages;
+            // std::cout << "end index " << I << "," << j << " drop: " << has_dropped_messages_ << std::endl;
           }
         }
         return (0);
@@ -265,7 +268,7 @@ namespace flex_sync {
           }
           num_deques_found++;
         }
-        std::cout << this << " candidate bound type: " << I << " has time: " << start_time_ << " -> " << end_time_ << std::endl;
+        // std::cout << " candidate bound type: " << I << " has time: " << start_time_ << " -> " << end_time_ << std::endl;
         return (num_deques_found);
       }
       ros::Time getStartTime() const { return (start_time_); }
@@ -288,13 +291,12 @@ namespace flex_sync {
                               FullIndex *end_index,
                               ros::Time *end_time) {
       CandidateBoundaryFinder cbf;
-      (void) for_each(type_infos_, cbf);
-      std::cout << "cbf: " << (void *) &cbf << std::endl;
+      (void) for_each(type_infos_, &cbf);
       *start_index = cbf.getStartIndex();
       *start_time  = cbf.getStartTime();
       *end_index = cbf.getEndIndex();
       *end_time  = cbf.getEndTime();
-      std::cout << "cand bound time: " << *start_time << " -> " << *end_time << std::endl;
+      // std::cout << "cand bound time: " << *start_time << " -> " << *end_time << std::endl;
     }
 
     class VirtualCandidateBoundaryFinder {
@@ -354,7 +356,7 @@ namespace flex_sync {
                                      FullIndex *end_index,
                                      ros::Time *end_time) {
       VirtualCandidateBoundaryFinder vcbf;
-      (void) for_each(type_infos_, vcbf);
+      (void) for_each(type_infos_, &vcbf);
       *start_index = vcbf.getStartIndex();
       *start_time  = vcbf.getStartTime();
       *end_index = vcbf.getEndIndex();
@@ -383,7 +385,7 @@ namespace flex_sync {
   
     void dequeDeleteFront(const FullIndex &index) {
       DequeFrontDeleter dfd(index);
-      (void) for_each(type_infos_, dfd);
+      (void) for_each(type_infos_, &dfd);
     }
 
     class DequeMoverFrontToPast {
@@ -418,7 +420,7 @@ namespace flex_sync {
     // Assumes that deque number <index> is non empty
     void dequeMoveFrontToPast(const FullIndex &index) {
       DequeMoverFrontToPast dmfp(index, false);
-      (void) for_each(type_infos_, dmfp);
+      (void) for_each(type_infos_, &dmfp);
     }
 
     class RecoverAndDelete {
@@ -446,7 +448,7 @@ namespace flex_sync {
 
     void recoverAndDelete() {
       RecoverAndDelete rnd;
-      (void) for_each(type_infos_, rnd);
+      (void) for_each(type_infos_, &rnd);
     }
 
     class ResetNumVirtualMoves {
@@ -500,10 +502,28 @@ namespace flex_sync {
       }
     };
 
+    class CandidatePrinter {
+    public:
+      CandidatePrinter() {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        const auto &cand = std::get<I>(sync->candidate_);
+        for (auto &msg: cand) {
+          std::cout << "cand: " << I << " " << msg->header.stamp << std::endl; 
+        }
+        return (0);
+      }
+    };
+
+    void printCandidate() {
+      CandidatePrinter cp;
+      (void) for_each(type_infos_, &cp);
+    }
 
     // Assumes: all deques are non empty now
     void publishCandidate() {
-      printf("Publishing candidate\n");
+      // std::cout << "publishing candidate" << std::endl;
+      // printCandidate();
       std::apply([this](auto &&... args) { cb_(args...); }, candidate_);
       // candidate_ = Tuple(); no needed
       pivot_ = FullIndex(); // reset to invalid
@@ -521,13 +541,13 @@ namespace flex_sync {
         ros::Time start_time, end_time;
         getCandidateBoundary(&start_index, &start_time, &end_index, &end_time);
         DroppedMessageUpdater dmu(end_index);
-        (void) for_each(type_infos_, dmu); // update dropped messages
+        (void) for_each(type_infos_, &dmu); // update dropped messages
         if (!pivot_.isValid()) {
           // We do not have a candidate
           // INVARIANT: the past_ vectors are empty
           // INVARIANT: (candidate_ has no filled members)
-          std::cout << "max duration: " << max_interval_duration_ << std::endl;
-          std::cout << start_time << " " << end_time << std::endl;
+          // std::cout << "max duration: " << max_interval_duration_ << std::endl;
+          // std::cout << start_time << " " << end_time << std::endl;
           std::cout << (end_time - start_time) << std::endl;
           if (end_time - start_time > max_interval_duration_) {
             // This interval is too big to be a valid candidate,
@@ -585,7 +605,8 @@ namespace flex_sync {
         } else if (num_non_empty_deques_ < tot_num_deques_)  {
           uint32_t num_non_empty_deques_before_virtual_search =
             num_non_empty_deques_;
-          (void) for_each(type_infos_, ResetNumVirtualMoves());
+          ResetNumVirtualMoves rnvm;
+          (void) for_each(type_infos_, &rnvm);
           while (1) {
             ros::Time end_time, start_time;
             FullIndex end_index, start_index;
@@ -606,7 +627,8 @@ namespace flex_sync {
               // that is better than the current candidate
               // Cleanup the virtual search:
               num_non_empty_deques_ = 0; // We will recompute it from scratch
-              (void) for_each(type_infos_, RecoverWithVirtualMoves());
+              RecoverWithVirtualMoves rvvm;
+              (void) for_each(type_infos_, &rvvm);
               // unused variable warning stopper
               (void)num_non_empty_deques_before_virtual_search;
               assert(num_non_empty_deques_before_virtual_search ==
@@ -621,9 +643,8 @@ namespace flex_sync {
             assert(start_index != pivot_);
             assert(start_time < pivot_time_);
             // move front to past and update num_virtual_moves
-            (void) for_each(type_infos_,
-                            DequeMoverFrontToPast(start_index, true));
-            dequeMoveFrontToPast(start_index);
+            DequeMoverFrontToPast dmfp(start_index, true);
+            (void) for_each(type_infos_, &dmfp);
           } // while(1)
         }
       } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)

@@ -17,12 +17,13 @@ using std::vector;
 using std::string;
 
 void callback(
-  const std::vector<sensor_msgs::Image::ConstPtr> &imgMsgV,
-  const std::vector<sensor_msgs::CameraInfo::ConstPtr> &cinfoMsgV) {
-  std::cout << "callback: " << 
-    imgMsgV[0]->header.stamp << imgMsgV[1]->header.stamp <<
-    imgMsgV[2]->header.stamp << imgMsgV[3]->header.stamp <<
-    imgMsgV[4]->header.stamp << imgMsgV[5]->header.stamp << std::endl;
+  const std::vector<sensor_msgs::Image::ConstPtr> &im,
+  const std::vector<sensor_msgs::CameraInfo::ConstPtr> &ci) {
+ 
+  std::cout << "callback: " << std::endl <<
+    " " << im[0]->header.stamp << " " << ci[0]->header.stamp << std::endl << 
+    " " << im[1]->header.stamp << " " << ci[1]->header.stamp << std::endl <<
+    " " << im[2]->header.stamp << " " << ci[2]->header.stamp << std::endl;
 }
 
 int main(int argc, char** argv) {
