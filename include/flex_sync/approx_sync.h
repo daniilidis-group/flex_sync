@@ -22,7 +22,6 @@
 
 namespace flex_sync {
 
-  // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements-type
   template <class T, class Tuple>
   struct Index;
 
@@ -36,12 +35,25 @@ namespace flex_sync {
     static const std::size_t value = 1 + Index<T, std::tuple<Types...>>::value;
   };
 
-  //
+  // FullIndex has two components: which type, and which topic within
+  // that type
+  struct FullIndex {
+    FullIndex(int32_t tp = -1, int32_t tc = -1): type(tp), topic(tc) {};
+    bool operator==(const FullIndex &a) {
+      return (type == a.type && topic == a.topic);
+    };
+    bool isValid() const { return(type != -1 && topic != -1); };
+    int32_t type;
+    int32_t topic;
+  };
+ 
   template <typename MsgType>
   using TopicDeque = std::deque<boost::shared_ptr<MsgType>>;
   template <typename MsgType>
   using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
   template <typename MsgType>
+  // TopicInfo maintains per-topic data: a deque, past messages
+  // etc
   struct TopicInfo {
     TopicDeque<MsgType> deque;
     TopicVec<MsgType> past;
@@ -49,40 +61,25 @@ namespace flex_sync {
     ros::Duration inter_message_lower_bound{ros::Duration(0)};
     uint32_t  num_virtual_moves{0};
   };
-  // TODO: learn how to do this correctly, w/o inheritance
-  template <typename MsgType>
-  struct TopicInfoVector: public std::vector<TopicInfo<MsgType>> {
-  };
-  // TypeInfo holds all deques and maps
-  // for a particular message type
+
+  // TypeInfo holds all data for a particular message type
   template <typename MsgType>
   struct TypeInfo {
-    TopicInfoVector<MsgType>   topic_info;
+    std::vector<TopicInfo<MsgType>>  topic_info;
     std::map<std::string, int> topic_to_index;
   };
+
   template <typename ... MsgTypes>
   class GeneralSync {
     // the signature of the callback function depends on the MsgTypes template
     // parameter.
-    typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...> CallbackArg;
-    typedef std::function<void(const std::vector<boost::shared_ptr<const MsgTypes>>& ...)> Callback;
+    typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...>
+    CallbackArg;
+    typedef std::function<void(const std::vector<boost::shared_ptr<
+                               const MsgTypes>>& ...)> Callback;
     typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
     
   public:
-    template<std::size_t I = 0, typename FuncT, typename... Tp>
-    inline typename std::enable_if<I == sizeof...(Tp), int>::type
-    for_each(std::tuple<Tp...> &, FuncT *) // Unused arg needs no name
-      { return 0; } // do nothing
-
-    template<std::size_t I = 0, typename FuncT, typename... Tp>
-    inline typename std::enable_if<I < sizeof...(Tp), int>::type
-    for_each(std::tuple<Tp...>& t, FuncT *f)  {
-      //std::cout << "operating on I = " << I << std::endl;
-      const int rv = (*f).template operate<I>(this);
-      //std::cout << "rv: " << rv << std::endl;
-      return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
-    }
-
     GeneralSync(const std::vector<std::vector<std::string>> &topics,
                 Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
@@ -195,16 +192,6 @@ namespace flex_sync {
       (void) for_each(type_infos_, &cm);
     }
 
-    struct FullIndex {
-      FullIndex(int32_t tp = -1, int32_t tc = -1): type(tp), topic(tc) {};
-      bool operator==(const FullIndex &a) {
-        return (type == a.type && topic == a.topic);
-      };
-      bool isValid() const { return(type != -1 && topic != -1); };
-      int32_t type;
-      int32_t topic;
-    };
- 
     class DroppedMessageUpdater {
     public:
       DroppedMessageUpdater(const FullIndex &end):
@@ -649,14 +636,32 @@ namespace flex_sync {
         }
       } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
     } // end of update()
- 
+
   private:
-    inline static const FullIndex NO_PIVOT;
-    TupleOfTypeInfo type_infos_;
+    // some neat template tricks picked up here:
+    // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements -type
+    // This template terminates the recursion
+    template<std::size_t I = 0, typename FuncT, typename... Tp>
+    inline typename std::enable_if<I == sizeof...(Tp), int>::type
+    for_each(std::tuple<Tp...> &, FuncT *) // Unused arg needs no name
+      { return 0; } // do nothing
     
-    std::vector<std::vector<std::string>> topics_;
-    Callback cb_;
-    CallbackArg candidate_;
+    // This template recursively calls itself, thereby iterating
+    template<std::size_t I = 0, typename FuncT, typename... Tp>
+    inline typename std::enable_if<I < sizeof...(Tp), int>::type
+    for_each(std::tuple<Tp...>& t, FuncT *f)  {
+      //std::cout << "operating on I = " << I << std::endl;
+      const int rv = (*f).template operate<I>(this);
+      //std::cout << "rv: " << rv << std::endl;
+      return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
+    }
+    // ----------- variables -----------------------  
+    inline static const FullIndex NO_PIVOT;
+    TupleOfTypeInfo type_infos_;  // tuple with data
+    
+    std::vector<std::vector<std::string>> topics_; // topics to be synced
+    Callback cb_;  // pointer to the callee
+    CallbackArg candidate_; // holds the potential callback
     int totalNumCallback_{0};
     int num_non_empty_deques_{0};
     int tot_num_deques_{0};
