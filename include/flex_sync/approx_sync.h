@@ -51,15 +51,16 @@ namespace flex_sync {
   using TopicDeque = std::deque<boost::shared_ptr<MsgType>>;
   template <typename MsgType>
   using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
-  template <typename MsgType>
   // TopicInfo maintains per-topic data: a deque, past messages
   // etc
+  template <typename MsgType>
   struct TopicInfo {
     TopicDeque<MsgType> deque;
     TopicVec<MsgType> past;
     bool has_dropped_messages{false};
     ros::Duration inter_message_lower_bound{ros::Duration(0)};
     uint32_t  num_virtual_moves{0};
+    bool warned_about_incorrect_bound{false};
   };
 
   // TypeInfo holds all data for a particular message type
@@ -129,6 +130,7 @@ namespace flex_sync {
     void process(const std::string &topic, const MsgPtrT &msg) {
       //std::cout << msg->header.stamp << " process " << topic << std::endl;
       typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
+      typedef TopicInfo<typename MsgPtrT::element_type const> TopicInfoT;
       // find correct topic info array via lookup by type 
       TypeInfoT &ti = std::get<TypeInfoT>(type_infos_);
       auto topic_it = ti.topic_to_index.find(topic);
@@ -137,7 +139,7 @@ namespace flex_sync {
                          topic << " for message type");
         throw std::runtime_error("invalid topic: " + topic);
       }
-      auto &topic_info = ti.topic_info[topic_it->second];
+      TopicInfoT &topic_info = ti.topic_info[topic_it->second];
       // add new message to the deque for this topic
       topic_info.deque.push_back(msg);
       if (topic_info.deque.size() == 1ul) {
@@ -148,7 +150,7 @@ namespace flex_sync {
           update(); // all deques have messages, go for it
         }
       } else {
-        // checkInterMessageBound(topic_info); XXX still need to implement
+        checkInterMessageBound<TopicInfoT>(&topic_info, topic);
       }
       // check for queue overflow and handle if necesary
       if (topic_info.deque.size() + topic_info.past.size() > queue_size_) {
@@ -655,6 +657,49 @@ namespace flex_sync {
       //std::cout << "rv: " << rv << std::endl;
       return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
     }
+
+    template <typename TopicInfoT>
+    void checkInterMessageBound(TopicInfoT *tinfo,
+                                const std::string &topic) {
+      auto &topic_info = *tinfo;
+      if (topic_info.warned_about_incorrect_bound) {
+        return;
+      }
+      const auto &deque = topic_info.deque;
+      const auto &v = topic_info.past;
+      assert(!deque.empty());
+      const ros::Time &msg_time = deque.back()->header.stamp;
+      ros::Time previous_msg_time;
+      if (deque.size() == (size_t) 1) {
+        if (v.empty()) {
+          // We have already published (or have never received)
+          // the previous message, we cannot check the bound
+          return;
+        }
+        previous_msg_time = v.back()->header.stamp;
+      } else  {
+        // There are at least 2 elements in the deque. Check that the gap
+        // respects the bound if it was provided.
+        previous_msg_time = deque[deque.size() - 2]->header.stamp;
+      }
+      // now we have msg_time and previous_msg_time, do the check
+      if (msg_time < previous_msg_time) {
+        ROS_WARN_STREAM("Messages for " << topic <<
+                        " arrived out of order (print only once)");
+        topic_info.warned_about_incorrect_bound = true;
+      } else if ((msg_time - previous_msg_time) <
+                 topic_info.inter_message_lower_bound) {
+        ROS_WARN_STREAM(
+          "Messages for " << topic << " arrived closer (" <<
+          (msg_time - previous_msg_time)
+          << ") than the lower bound you provided ("
+          << topic_info.inter_message_lower_bound
+          << ") (will print only once)");
+        topic_info.warned_about_incorrect_bound = true;
+      }
+    }
+
+
     // ----------- variables -----------------------  
     inline static const FullIndex NO_PIVOT;
     TupleOfTypeInfo type_infos_;  // tuple with data
