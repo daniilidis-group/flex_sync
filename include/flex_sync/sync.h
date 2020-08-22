@@ -13,7 +13,7 @@
 #include <vector>
 #include <map>
 #include <mutex>
-#include <tuple>
+
 
 /*
  * Class for synchronizing across variable number of messages
@@ -174,7 +174,6 @@ namespace flex_sync {
                                const vector<T2ConstPtr> &)> Callback;
     typedef map<string, map<Time, T1ConstPtr>> MsgMap1;
     typedef map<string, map<Time, T2ConstPtr>> MsgMap2;
-    typedef std::tuple<MsgMap1, MsgMap2> TupleOfMaps;
 
     Sync(const vector<vector<string>> &topics,
           const Callback &callback,
@@ -195,10 +194,10 @@ namespace flex_sync {
     }
 
     void addTopic1(const std::string &topic) {
-      SyncBase::addTopic(topic, 0, &std::get<0>(msgMaps_));
+      SyncBase::addTopic(topic, 0, &msgMap1_);
     }
     void addTopic2(const std::string &topic) {
-      SyncBase::addTopic(topic, 1, &std::get<1>(msgMaps_));
+      SyncBase::addTopic(topic, 1, &msgMap2_);
     }
 
     void process(const std::string &topic, const T1ConstPtr &msgPtr) {
@@ -209,47 +208,16 @@ namespace flex_sync {
       SyncBase::process(topic, msgPtr, &msgMap2_);
     }
 
-    // from:
-    // https://stackoverflow.com/questions/1198260/
-    // how-can-you-iterate-over-the-elements-of-an-stdtuple
-
-    // this defines a function called "for_each", which has
-    // a return type of void, but only if the conditional of
-    // the std::enable_if<> is true.
-
-    // terminating template
-    template<std::size_t I = 0, typename FuncT, typename... Tp>
-    inline typename std::enable_if<I == sizeof...(Tp), void>::type
-    for_each(std::tuple<Tp...> &, FuncT)
-      { }
-
-    // recursive iterating template
-    template<std::size_t I = 0, typename FuncT, typename... Tp>
-    inline typename std::enable_if<I < sizeof...(Tp), void>::type
-    for_each(std::tuple<Tp...>& t, FuncT f) {
-      f(std::get<I>(t));
-      for_each<I + 1, FuncT, Tp...>(t, f);
-    }
-     
   private:
-    struct func {
-      template<typename Tpp>
-      void operator()(const Tpp &elem) const {
-        std::cout << "functor invoked!" << std::endl;
-      };
-    };
     void publishMessages(const Time &t) override {
       vector<T1ConstPtr> mvec1 = make_vec<T1>(t, topicsVec_[0], &msgMap1_);
       vector<T2ConstPtr> mvec2 = make_vec<T2>(t, topicsVec_[1], &msgMap2_);
       callback_(mvec1, mvec2);
-      
-      for_each<TupleOfMaps>(msgMaps_, func);
     }
 
     Callback        callback_;
     MsgMap1         msgMap1_;
     MsgMap2         msgMap2_;
-    TupleOfMaps     msgMaps_;
   };
   
   /* -------------------------- 3 different types ----------------- */
