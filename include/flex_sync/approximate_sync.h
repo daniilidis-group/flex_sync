@@ -2,8 +2,8 @@
  * 2020 Bernd Pfrommer bernd.pfrommer@gmail.com
  */
 
-#ifndef FLEX_SYNC_APPROX_SYNC_H
-#define FLEX_SYNC_APPROX_SYNC_H
+#ifndef FLEX_SYNC_APPROXIMATE_SYNC_H
+#define FLEX_SYNC_APPROXIMATE_SYNC_H
 
 #include <ros/ros.h>
 #include <functional>
@@ -16,9 +16,8 @@
 #include <tuple>
 #include <deque>
 /*
- * Class for synchronizing across variable number of messages
+ * Class for approximate synchronizing across variable number of messages
  */
-
 
 namespace flex_sync {
 
@@ -71,7 +70,7 @@ namespace flex_sync {
   };
 
   template <typename ... MsgTypes>
-  class GeneralSync {
+  class ApproximateSync {
     // the signature of the callback function depends on the MsgTypes template
     // parameter.
     typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...>
@@ -81,54 +80,30 @@ namespace flex_sync {
     typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
     
   public:
-    GeneralSync(const std::vector<std::vector<std::string>> &topics,
+    // create an approximate sync like the one in ROS1, but with
+    // flexible number of topics per type.
+    // The callback signature looks different. For example
+    // for two message types, MsgType1 and MsgType2 (e.g sensor_msgs::Image)
+    // void callback_approx(
+    //    const std::vector<MsgType1::ConstPtr> &im,
+    //    const std::vector<MsgType2::ConstPtr> &ci);
+    // The first element of the topics argument must have all the topics
+    // for MsgType1, the second the topics for MsgType2
+
+    ApproximateSync(const std::vector<std::vector<std::string>> &topics,
                 Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
       TopicInfoInitializer tii;
       totalNumCallback_ = for_each(type_infos_, &tii);
-      std::cout << "total num cb args: " << totalNumCallback_ << std::endl;
     }
 
-    struct TopicInfoInitializer {
-      template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) const
-        {
-          const int n_topic = sync->topics_[I].size();
-          std::cout << "initializing type: " << I << " with " << n_topic << " topics " << std::endl;
-          std::get<I>(sync->candidate_).resize(n_topic);
-          const size_t num_topics = sync->topics_[I].size();
-          auto &type_info = std::get<I>(sync->type_infos_);
-          type_info.topic_info.resize(num_topics);
-          sync->tot_num_deques_ += num_topics;
-          // make map between topic string and index for
-          // lookup when data arrives
-          for (int t_idx = 0; t_idx < (int) sync->topics_[I].size(); t_idx++) {
-            type_info.topic_to_index[sync->topics_[I][t_idx]] = t_idx;
-          }
-          return (n_topic);
-        }
-    };
-
-    struct MapUpdater {
-      template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) const
-        {
-          int num_cb_vals_found = 0;
-          for (size_t topic_idx = 0; topic_idx < sync->topics_[I].size(); topic_idx++) {
-            const std::string &topic = sync->topics_[I][topic_idx];
-            auto &deque = std::get<I>(sync->type_infos_)[topic].deque;
-            if (deque.empty()) {
-              std::get<I>(sync->cba_)[topic_idx] = deque.back();
-              num_cb_vals_found++;
-            }
-          }
-          return (num_cb_vals_found);
-        }
-    };
-
+    // Call this method to feed data into the sync.
+    // The topic must match one of the topics that were
+    // provided when the sync was created or bad things will happen.
+    // Once enough data is available the callback function will
+    // be called.
     template<typename MsgPtrT>
     void process(const std::string &topic, const MsgPtrT &msg) {
-      //std::cout << msg->header.stamp << " process " << topic << std::endl;
       typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
       typedef TopicInfo<typename MsgPtrT::element_type const> TopicInfoT;
       // find correct topic info array via lookup by type 
@@ -173,20 +148,59 @@ namespace flex_sync {
         }
       }
     }
+  private:
+    struct TopicInfoInitializer {
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) const
+        {
+          const int n_topic = sync->topics_[I].size();
+          std::get<I>(sync->candidate_).resize(n_topic);
+          const size_t num_topics = sync->topics_[I].size();
+          auto &type_info = std::get<I>(sync->type_infos_);
+          type_info.topic_info.resize(num_topics);
+          sync->tot_num_deques_ += num_topics;
+          // make map between topic string and index for
+          // lookup when data arrives
+          for (int t_idx = 0; t_idx < (int) sync->topics_[I].size(); t_idx++) {
+            type_info.topic_to_index[sync->topics_[I][t_idx]] = t_idx;
+          }
+          return (n_topic);
+        }
+    };
+
+    struct MapUpdater {
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) const
+        {
+          int num_cb_vals_found = 0;
+          for (size_t topic_idx = 0;
+               topic_idx < sync->topics_[I].size(); topic_idx++) {
+            const std::string &topic = sync->topics_[I][topic_idx];
+            auto &deque = std::get<I>(sync->type_infos_)[topic].deque;
+            if (deque.empty()) {
+              std::get<I>(sync->cba_)[topic_idx] = deque.back();
+              num_cb_vals_found++;
+            }
+          }
+          return (num_cb_vals_found);
+        }
+    };
 
     struct CandidateMaker {
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) const {
+      int operate(ApproximateSync<MsgTypes ...> *sync) const {
           int num_cb_vals_found = 0;
           auto &type_info = std::get<I>(sync->type_infos_);
           for (size_t i = 0; i < type_info.topic_info.size(); i++) {
             auto &ti = type_info.topic_info[i];
-            auto &deque = ti.deque;
+            const auto &deque = ti.deque;
             std::get<I>(sync->candidate_)[i] = deque.front();
+            // Delete all past messages, since we have found a better candidate
+            ti.past.clear();
             num_cb_vals_found++;
           }
           return (num_cb_vals_found);
-        }
+      }
     };
 
     void makeCandidate() {
@@ -199,7 +213,7 @@ namespace flex_sync {
       DroppedMessageUpdater(const FullIndex &end):
         end_index_(end), has_dropped_messages_(false) {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (size_t j = 0; j < type_info.topic_info.size(); j++) {
           auto &topic_info = type_info.topic_info[j];
@@ -207,12 +221,10 @@ namespace flex_sync {
             // No dropped message could have been better to use than
             // the ones we have, so it becomes ok to use this topic
             // as pivot in the future
-            // std::cout << "no dropped_messages: " << I << "," << j << std::endl;
             topic_info.has_dropped_messages = false;
           } else {
             // capture whether the end_index has dropped messages
             has_dropped_messages_ = topic_info.has_dropped_messages;
-            // std::cout << "end index " << I << "," << j << " drop: " << has_dropped_messages_ << std::endl;
           }
         }
         return (0);
@@ -233,7 +245,7 @@ namespace flex_sync {
         end_time_(ros::Time(0, 1)) {
       };
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         int num_deques_found = 0;
         const auto &type_info = std::get<I>(sync->type_infos_);
         for (size_t topicIdx = 0; topicIdx < type_info.topic_info.size();
@@ -257,7 +269,6 @@ namespace flex_sync {
           }
           num_deques_found++;
         }
-        // std::cout << " candidate bound type: " << I << " has time: " << start_time_ << " -> " << end_time_ << std::endl;
         return (num_deques_found);
       }
       ros::Time getStartTime() const { return (start_time_); }
@@ -285,7 +296,6 @@ namespace flex_sync {
       *start_time  = cbf.getStartTime();
       *end_index = cbf.getEndIndex();
       *end_time  = cbf.getEndTime();
-      // std::cout << "cand bound time: " << *start_time << " -> " << *end_time << std::endl;
     }
 
     class VirtualCandidateBoundaryFinder {
@@ -297,7 +307,7 @@ namespace flex_sync {
       };
 
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         int num_deques_found = 0;
         const auto &type_info = std::get<I>(sync->type_infos_);
         assert(sync->pivot_.isValid());
@@ -356,7 +366,7 @@ namespace flex_sync {
     public:
       DequeFrontDeleter(const FullIndex &index): index_(index) {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         if (I == index_.type) {
           auto &deque = type_info.topic_info[index_.topic].deque;
@@ -383,7 +393,7 @@ namespace flex_sync {
                             bool updateVirtualMoves):
         index_(index), update_virtual_moves_(updateVirtualMoves) {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         if (I == index_.type) {
           auto &ti = type_info.topic_info[index_.topic];
@@ -416,7 +426,7 @@ namespace flex_sync {
     public:
       RecoverAndDelete() {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (auto &ti: type_info.topic_info) {
           auto &deque = ti.deque;
@@ -444,7 +454,7 @@ namespace flex_sync {
     public:
       ResetNumVirtualMoves() {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (auto &ti: type_info.topic_info) {
           ti.num_virtual_moves = 0;
@@ -457,7 +467,7 @@ namespace flex_sync {
     public:
       RecoverWithVirtualMoves() {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (auto &ti: type_info.topic_info) {
           for (uint32_t n = ti.num_virtual_moves; n != 0; n--) {
@@ -476,7 +486,7 @@ namespace flex_sync {
     public:
       Recover() {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (auto &ti: type_info.topic_info) {
           while (!ti.past.empty()) {
@@ -490,12 +500,66 @@ namespace flex_sync {
         return (0);
       }
     };
+#ifdef DEBUG_PRINTING
+    class StatePrinter {
+    public:
+      StatePrinter() {};
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
+        int num_topics = 0;
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          auto &deque = ti.deque;
+          auto &past  = ti.past;
+          ros::Time dt, pt;
+          if (!deque.empty()) {
+            dt = deque.back()->header.stamp;
+          }
+          if (!past.empty()) {
+            pt = past.back()->header.stamp;
+          }
+          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
+          std::cout << n << " deque: " << deque.size() << " " << dt << std::endl;
+          std::cout << n << " past:  " << past.size() << " " << pt << std::endl;
+          num_topics++;
+        }
+        return (num_topics);;
+      }
+    };
+
+    void printState() {
+      StatePrinter sp;
+      (void) for_each(type_infos_, &sp);
+    }
+
+    class NVMPrinter {
+    public:
+      NVMPrinter() {};
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
+        int num_topics = 0;
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
+          std::cout << n << " nvm: " << ti.num_virtual_moves << " " <<
+            " wb: " << ti.warned_about_incorrect_bound << std::endl;
+          num_topics++;
+        }
+        return (num_topics);;
+      }
+    };
+
+
+    void printNVM() {
+      NVMPrinter nvmp;
+      (void) for_each(type_infos_, &nvmp);
+    }
 
     class CandidatePrinter {
     public:
       CandidatePrinter() {};
       template<std::size_t I>
-      int operate(GeneralSync<MsgTypes ...> *sync) {
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
         const auto &cand = std::get<I>(sync->candidate_);
         for (auto &msg: cand) {
           std::cout << "cand: " << I << " " << msg->header.stamp << std::endl; 
@@ -508,6 +572,7 @@ namespace flex_sync {
       CandidatePrinter cp;
       (void) for_each(type_infos_, &cp);
     }
+#endif
 
     // Assumes: all deques are non empty now
     void publishCandidate() {
@@ -522,6 +587,7 @@ namespace flex_sync {
       recoverAndDelete();
     }
 
+
     void update()  {
       // While no deque is empty
       while (num_non_empty_deques_ == tot_num_deques_) {
@@ -535,9 +601,6 @@ namespace flex_sync {
           // We do not have a candidate
           // INVARIANT: the past_ vectors are empty
           // INVARIANT: (candidate_ has no filled members)
-          // std::cout << "max duration: " << max_interval_duration_ << std::endl;
-          // std::cout << start_time << " " << end_time << std::endl;
-          // std::cout << (end_time - start_time) << std::endl;
           if (end_time - start_time > max_interval_duration_) {
             // This interval is too big to be a valid candidate,
             // move to the next
@@ -575,7 +638,6 @@ namespace flex_sync {
         }
         // INVARIANT: we have a candidate and pivot
         ROS_ASSERT(pivot_.isValid());
-        //printf("start_index == %d, pivot_ == %d\n", start_index, pivot_);
         if (start_index == pivot_) {
           // TODO: replace with start_time == pivot_time_
           // We have exhausted all possible candidates for this pivot,
@@ -591,12 +653,14 @@ namespace flex_sync {
           // save some unnecessary work and
           // it makes things (a little) easier to understand
           publishCandidate();
+
         } else if (num_non_empty_deques_ < tot_num_deques_)  {
           uint32_t num_non_empty_deques_before_virtual_search =
             num_non_empty_deques_;
           ResetNumVirtualMoves rnvm;
           (void) for_each(type_infos_, &rnvm);
           while (1) {
+            //printNVM();
             ros::Time end_time, start_time;
             FullIndex end_index, start_index;
             getVirtualCandidateBoundary(&start_index, &start_time,
@@ -639,25 +703,6 @@ namespace flex_sync {
       } // while(num_non_empty_deques_ == (uint32_t)RealTypeCount::value)
     } // end of update()
 
-  private:
-    // some neat template tricks picked up here:
-    // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements -type
-    // This template terminates the recursion
-    template<std::size_t I = 0, typename FuncT, typename... Tp>
-    inline typename std::enable_if<I == sizeof...(Tp), int>::type
-    for_each(std::tuple<Tp...> &, FuncT *) // Unused arg needs no name
-      { return 0; } // do nothing
-    
-    // This template recursively calls itself, thereby iterating
-    template<std::size_t I = 0, typename FuncT, typename... Tp>
-    inline typename std::enable_if<I < sizeof...(Tp), int>::type
-    for_each(std::tuple<Tp...>& t, FuncT *f)  {
-      //std::cout << "operating on I = " << I << std::endl;
-      const int rv = (*f).template operate<I>(this);
-      //std::cout << "rv: " << rv << std::endl;
-      return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
-    }
-
     template <typename TopicInfoT>
     void checkInterMessageBound(TopicInfoT *tinfo,
                                 const std::string &topic) {
@@ -699,6 +744,22 @@ namespace flex_sync {
       }
     }
 
+    // some neat template tricks picked up here:
+    // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements -type
+    // This template terminates the recursion
+    template<std::size_t I = 0, typename FuncT, typename... Tp>
+    inline typename std::enable_if<I == sizeof...(Tp), int>::type
+    for_each(std::tuple<Tp...> &, FuncT *) // Unused arg needs no name
+      { return 0; } // do nothing
+    
+    // This template recursively calls itself, thereby iterating
+    template<std::size_t I = 0, typename FuncT, typename... Tp>
+    inline typename std::enable_if<I < sizeof...(Tp), int>::type
+    for_each(std::tuple<Tp...>& t, FuncT *f)  {
+      const int rv = (*f).template operate<I>(this);
+      return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
+    }
+
 
     // ----------- variables -----------------------  
     inline static const FullIndex NO_PIVOT;
@@ -721,4 +782,4 @@ namespace flex_sync {
 }
 
 
-#endif // FLEX_SYNC_APPROX_SYNC_H
+#endif // FLEX_SYNC_APPROXIMATE_SYNC_H
