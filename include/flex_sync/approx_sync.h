@@ -86,15 +86,12 @@ namespace flex_sync {
       topics_(topics), cb_(cb), queue_size_(queueSize) {
       TopicInfoInitializer tii;
       totalNumCallback_ = for_each(type_infos_, &tii);
-      std::cout << "total num cb args: " << totalNumCallback_ << std::endl;
     }
-
     struct TopicInfoInitializer {
       template<std::size_t I>
       int operate(GeneralSync<MsgTypes ...> *sync) const
         {
           const int n_topic = sync->topics_[I].size();
-          std::cout << "initializing type: " << I << " with " << n_topic << " topics " << std::endl;
           std::get<I>(sync->candidate_).resize(n_topic);
           const size_t num_topics = sync->topics_[I].size();
           auto &type_info = std::get<I>(sync->type_infos_);
@@ -128,7 +125,6 @@ namespace flex_sync {
 
     template<typename MsgPtrT>
     void process(const std::string &topic, const MsgPtrT &msg) {
-      //std::cout << msg->header.stamp << " process " << topic << std::endl;
       typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
       typedef TopicInfo<typename MsgPtrT::element_type const> TopicInfoT;
       // find correct topic info array via lookup by type 
@@ -181,12 +177,14 @@ namespace flex_sync {
           auto &type_info = std::get<I>(sync->type_infos_);
           for (size_t i = 0; i < type_info.topic_info.size(); i++) {
             auto &ti = type_info.topic_info[i];
-            auto &deque = ti.deque;
+            const auto &deque = ti.deque;
             std::get<I>(sync->candidate_)[i] = deque.front();
+            // Delete all past messages, since we have found a better candidate
+            ti.past.clear();
             num_cb_vals_found++;
           }
           return (num_cb_vals_found);
-        }
+      }
     };
 
     void makeCandidate() {
@@ -285,7 +283,6 @@ namespace flex_sync {
       *start_time  = cbf.getStartTime();
       *end_index = cbf.getEndIndex();
       *end_time  = cbf.getEndTime();
-      // std::cout << "cand bound time: " << *start_time << " -> " << *end_time << std::endl;
     }
 
     class VirtualCandidateBoundaryFinder {
@@ -490,6 +487,73 @@ namespace flex_sync {
         return (0);
       }
     };
+    // Assumes: all deques are non empty now
+    void publishCandidate() {
+      // std::cout << "publishing candidate" << std::endl;
+      // printCandidate();
+      std::apply([this](auto &&... args) { cb_(args...); }, candidate_);
+      // candidate_ = Tuple(); no needed
+      pivot_ = FullIndex(); // reset to invalid
+      // Recover hidden messages, and delete the ones
+      // corresponding to the candidate
+      num_non_empty_deques_ = 0; // We will recompute it from scratch
+      recoverAndDelete();
+    }
+
+#ifdef DEBUG_PRINTING
+    class StatePrinter {
+    public:
+      StatePrinter() {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        int num_topics = 0;
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          auto &deque = ti.deque;
+          auto &past  = ti.past;
+          ros::Time dt, pt;
+          if (!deque.empty()) {
+            dt = deque.back()->header.stamp;
+          }
+          if (!past.empty()) {
+            pt = past.back()->header.stamp;
+          }
+          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
+          std::cout << n << " deque: " << deque.size() << " " << dt << std::endl;
+          std::cout << n << " past:  " << past.size() << " " << pt << std::endl;
+          num_topics++;
+        }
+        return (num_topics);;
+      }
+    };
+
+    void printState() {
+      StatePrinter sp;
+      (void) for_each(type_infos_, &sp);
+    }
+
+    class NVMPrinter {
+    public:
+      NVMPrinter() {};
+      template<std::size_t I>
+      int operate(GeneralSync<MsgTypes ...> *sync) {
+        int num_topics = 0;
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
+          std::cout << n << " nvm: " << ti.num_virtual_moves << " " <<
+            " wb: " << ti.warned_about_incorrect_bound << std::endl;
+          num_topics++;
+        }
+        return (num_topics);;
+      }
+    };
+
+
+    void printNVM() {
+      NVMPrinter nvmp;
+      (void) for_each(type_infos_, &nvmp);
+    }
 
     class CandidatePrinter {
     public:
@@ -508,19 +572,8 @@ namespace flex_sync {
       CandidatePrinter cp;
       (void) for_each(type_infos_, &cp);
     }
+#endif
 
-    // Assumes: all deques are non empty now
-    void publishCandidate() {
-      // std::cout << "publishing candidate" << std::endl;
-      // printCandidate();
-      std::apply([this](auto &&... args) { cb_(args...); }, candidate_);
-      // candidate_ = Tuple(); no needed
-      pivot_ = FullIndex(); // reset to invalid
-      // Recover hidden messages, and delete the ones
-      // corresponding to the candidate
-      num_non_empty_deques_ = 0; // We will recompute it from scratch
-      recoverAndDelete();
-    }
 
     void update()  {
       // While no deque is empty
@@ -535,9 +588,6 @@ namespace flex_sync {
           // We do not have a candidate
           // INVARIANT: the past_ vectors are empty
           // INVARIANT: (candidate_ has no filled members)
-          // std::cout << "max duration: " << max_interval_duration_ << std::endl;
-          // std::cout << start_time << " " << end_time << std::endl;
-          // std::cout << (end_time - start_time) << std::endl;
           if (end_time - start_time > max_interval_duration_) {
             // This interval is too big to be a valid candidate,
             // move to the next
@@ -575,7 +625,6 @@ namespace flex_sync {
         }
         // INVARIANT: we have a candidate and pivot
         ROS_ASSERT(pivot_.isValid());
-        //printf("start_index == %d, pivot_ == %d\n", start_index, pivot_);
         if (start_index == pivot_) {
           // TODO: replace with start_time == pivot_time_
           // We have exhausted all possible candidates for this pivot,
@@ -591,12 +640,14 @@ namespace flex_sync {
           // save some unnecessary work and
           // it makes things (a little) easier to understand
           publishCandidate();
+
         } else if (num_non_empty_deques_ < tot_num_deques_)  {
           uint32_t num_non_empty_deques_before_virtual_search =
             num_non_empty_deques_;
           ResetNumVirtualMoves rnvm;
           (void) for_each(type_infos_, &rnvm);
           while (1) {
+            //printNVM();
             ros::Time end_time, start_time;
             FullIndex end_index, start_index;
             getVirtualCandidateBoundary(&start_index, &start_time,
@@ -652,9 +703,7 @@ namespace flex_sync {
     template<std::size_t I = 0, typename FuncT, typename... Tp>
     inline typename std::enable_if<I < sizeof...(Tp), int>::type
     for_each(std::tuple<Tp...>& t, FuncT *f)  {
-      //std::cout << "operating on I = " << I << std::endl;
       const int rv = (*f).template operate<I>(this);
-      //std::cout << "rv: " << rv << std::endl;
       return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
     }
 

@@ -26,14 +26,14 @@ public:
 void callback(
   const sensor_msgs::Image::ConstPtr &msg0,
   const sensor_msgs::Image::ConstPtr &msg1,
-  const sensor_msgs::CameraInfo::ConstPtr &msg2,
+  const sensor_msgs::Image::ConstPtr &msg2,
   const sensor_msgs::CameraInfo::ConstPtr &msg3,
-  const sensor_msgs::Image::ConstPtr &msg4,
+  const sensor_msgs::CameraInfo::ConstPtr &msg4,
   const sensor_msgs::CameraInfo::ConstPtr &msg5) {
   std::cout << "callback: " << std::endl <<
-    " " << msg0->header.stamp << " " << msg2->header.stamp << std::endl <<
-    " " << msg1->header.stamp << " " << msg3->header.stamp << std::endl <<
-    " " << msg4->header.stamp << " " << msg5->header.stamp << std::endl;
+    " " << msg0->header.stamp << " " << msg3->header.stamp << std::endl <<
+    " " << msg1->header.stamp << " " << msg4->header.stamp << std::endl <<
+    " " << msg2->header.stamp << " " << msg5->header.stamp << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -73,13 +73,14 @@ int main(int argc, char** argv) {
     }
     // synchronizer
     typedef message_filters::sync_policies::ApproximateTime<
-      sensor_msgs::Image, sensor_msgs::Image,
+      sensor_msgs::Image, sensor_msgs::Image, sensor_msgs::Image, 
       sensor_msgs::CameraInfo, sensor_msgs::CameraInfo,
-      sensor_msgs::Image, sensor_msgs::CameraInfo> SyncPolicy;
+      sensor_msgs::CameraInfo> SyncPolicy;
     message_filters::Synchronizer<SyncPolicy>
-      sync(SyncPolicy(25), *img_sub[topics[0]], *img_sub[topics[1]],
+      sync(SyncPolicy(25),
+           *img_sub[topics[0]], *img_sub[topics[1]], *img_sub[topics[2]],
            *caminfo_sub[topics[3]], *caminfo_sub[topics[4]],
-           *img_sub[topics[2]], *caminfo_sub[topics[5]]);
+           *caminfo_sub[topics[5]]);
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4, _5, _6));
 
     uint32_t cnt(0);
