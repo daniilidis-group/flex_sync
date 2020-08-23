@@ -50,6 +50,7 @@ namespace flex_sync {
   using TopicDeque = std::deque<boost::shared_ptr<MsgType>>;
   template <typename MsgType>
   using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
+
   // TopicInfo maintains per-topic data: a deque, past messages
   // etc
   template <typename MsgType>
