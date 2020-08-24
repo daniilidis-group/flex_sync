@@ -155,24 +155,6 @@ namespace flex_sync {
         }
     };
 
-    struct MapUpdater {
-      template<std::size_t I>
-      int operate(ApproximateSync<MsgTypes ...> *sync) const
-        {
-          int num_cb_vals_found = 0;
-          for (size_t topic_idx = 0;
-               topic_idx < sync->topics_[I].size(); topic_idx++) {
-            const std::string &topic = sync->topics_[I][topic_idx];
-            auto &deque = std::get<I>(sync->type_infos_)[topic].deque;
-            if (deque.empty()) {
-              std::get<I>(sync->cba_)[topic_idx] = deque.back();
-              num_cb_vals_found++;
-            }
-          }
-          return (num_cb_vals_found);
-        }
-    };
-
     struct CandidateMaker {
       template<std::size_t I>
       int operate(ApproximateSync<MsgTypes ...> *sync) const {
