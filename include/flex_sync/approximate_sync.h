@@ -501,79 +501,6 @@ namespace flex_sync {
         return (0);
       }
     };
-#ifdef DEBUG_PRINTING
-    class StatePrinter {
-    public:
-      StatePrinter() {};
-      template<std::size_t I>
-      int operate(ApproximateSync<MsgTypes ...> *sync) {
-        int num_topics = 0;
-        auto &type_info = std::get<I>(sync->type_infos_);
-        for (auto &ti: type_info.topic_info) {
-          auto &deque = ti.deque;
-          auto &past  = ti.past;
-          ros::Time dt, pt;
-          if (!deque.empty()) {
-            dt = deque.back()->header.stamp;
-          }
-          if (!past.empty()) {
-            pt = past.back()->header.stamp;
-          }
-          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
-          std::cout << n << " deque: " << deque.size() << " " << dt << std::endl;
-          std::cout << n << " past:  " << past.size() << " " << pt << std::endl;
-          num_topics++;
-        }
-        return (num_topics);;
-      }
-    };
-
-    void printState() {
-      StatePrinter sp;
-      (void) for_each(type_infos_, &sp);
-    }
-
-    class NVMPrinter {
-    public:
-      NVMPrinter() {};
-      template<std::size_t I>
-      int operate(ApproximateSync<MsgTypes ...> *sync) {
-        int num_topics = 0;
-        auto &type_info = std::get<I>(sync->type_infos_);
-        for (auto &ti: type_info.topic_info) {
-          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
-          std::cout << n << " nvm: " << ti.num_virtual_moves << " " <<
-            " wb: " << ti.warned_about_incorrect_bound << std::endl;
-          num_topics++;
-        }
-        return (num_topics);;
-      }
-    };
-
-
-    void printNVM() {
-      NVMPrinter nvmp;
-      (void) for_each(type_infos_, &nvmp);
-    }
-
-    class CandidatePrinter {
-    public:
-      CandidatePrinter() {};
-      template<std::size_t I>
-      int operate(ApproximateSync<MsgTypes ...> *sync) {
-        const auto &cand = std::get<I>(sync->candidate_);
-        for (auto &msg: cand) {
-          std::cout << "cand: " << I << " " << msg->header.stamp << std::endl; 
-        }
-        return (0);
-      }
-    };
-
-    void printCandidate() {
-      CandidatePrinter cp;
-      (void) for_each(type_infos_, &cp);
-    }
-#endif
 
     // Assumes: all deques are non empty now
     void publishCandidate() {
@@ -744,6 +671,79 @@ namespace flex_sync {
         topic_info.warned_about_incorrect_bound = true;
       }
     }
+#ifdef DEBUG_PRINTING
+    class StatePrinter {
+    public:
+      StatePrinter() {};
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
+        int num_topics = 0;
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          auto &deque = ti.deque;
+          auto &past  = ti.past;
+          ros::Time dt, pt;
+          if (!deque.empty()) {
+            dt = deque.back()->header.stamp;
+          }
+          if (!past.empty()) {
+            pt = past.back()->header.stamp;
+          }
+          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
+          std::cout << n << " deque: " << deque.size() << " " << dt << std::endl;
+          std::cout << n << " past:  " << past.size() << " " << pt << std::endl;
+          num_topics++;
+        }
+        return (num_topics);;
+      }
+    };
+
+    void printState() {
+      StatePrinter sp;
+      (void) for_each(type_infos_, &sp);
+    }
+
+    class NVMPrinter {
+    public:
+      NVMPrinter() {};
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
+        int num_topics = 0;
+        auto &type_info = std::get<I>(sync->type_infos_);
+        for (auto &ti: type_info.topic_info) {
+          const int n = I * 3 + num_topics; // XXX only right for 3 topics/type
+          std::cout << n << " nvm: " << ti.num_virtual_moves << " " <<
+            " wb: " << ti.warned_about_incorrect_bound << std::endl;
+          num_topics++;
+        }
+        return (num_topics);;
+      }
+    };
+
+
+    void printNVM() {
+      NVMPrinter nvmp;
+      (void) for_each(type_infos_, &nvmp);
+    }
+
+    class CandidatePrinter {
+    public:
+      CandidatePrinter() {};
+      template<std::size_t I>
+      int operate(ApproximateSync<MsgTypes ...> *sync) {
+        const auto &cand = std::get<I>(sync->candidate_);
+        for (auto &msg: cand) {
+          std::cout << "cand: " << I << " " << msg->header.stamp << std::endl; 
+        }
+        return (0);
+      }
+    };
+
+    void printCandidate() {
+      CandidatePrinter cp;
+      (void) for_each(type_infos_, &cp);
+    }
+#endif
 
     // some neat template tricks picked up here:
     // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements -type
