@@ -82,7 +82,7 @@ namespace flex_sync {
                 Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
       TopicInfoInitializer tii;
-      totalNumCallback_ = for_each(type_infos_, &tii);
+      (void) for_each(type_infos_, &tii);
     }
 
     // Call this method to feed data into the sync.
@@ -756,7 +756,6 @@ namespace flex_sync {
     std::vector<std::vector<std::string>> topics_; // topics to be synced
     Callback cb_;  // pointer to the callee
     CallbackArg candidate_; // holds the potential callback
-    int totalNumCallback_{0};
     int num_non_empty_deques_{0};
     int tot_num_deques_{0};
     size_t queue_size_;
