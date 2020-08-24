@@ -141,9 +141,8 @@ namespace flex_sync {
       template<std::size_t I>
       int operate(ApproximateSync<MsgTypes ...> *sync) const
         {
-          const int n_topic = sync->topics_[I].size();
-          std::get<I>(sync->candidate_).resize(n_topic);
           const size_t num_topics = sync->topics_[I].size();
+          std::get<I>(sync->candidate_).resize(num_topics);
           auto &type_info = std::get<I>(sync->type_infos_);
           type_info.topic_info.resize(num_topics);
           sync->tot_num_deques_ += num_topics;
@@ -152,7 +151,7 @@ namespace flex_sync {
           for (int t_idx = 0; t_idx < (int) sync->topics_[I].size(); t_idx++) {
             type_info.topic_to_index[sync->topics_[I][t_idx]] = t_idx;
           }
-          return (n_topic);
+          return (num_topics);
         }
     };
 
