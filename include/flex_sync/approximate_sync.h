@@ -1,7 +1,6 @@
 /* -*-c++-*--------------------------------------------------------------------
  * 2020 Bernd Pfrommer bernd.pfrommer@gmail.com
  */
-
 #ifndef FLEX_SYNC_APPROXIMATE_SYNC_H
 #define FLEX_SYNC_APPROXIMATE_SYNC_H
 
@@ -15,59 +14,20 @@
 #include <utility>
 #include <tuple>
 #include <deque>
+
 /*
  * Class for approximate synchronizing across variable number of messages
  */
 
 namespace flex_sync {
-
-  // FullIndex has two components: which type, and which topic within
-  // that type
-  struct FullIndex {
-    FullIndex(int32_t tp = -1, int32_t tc = -1): type(tp), topic(tc) {};
-    bool operator==(const FullIndex &a) {
-      return (type == a.type && topic == a.topic);
-    };
-    bool isValid() const { return(type != -1 && topic != -1); };
-    int32_t type;
-    int32_t topic;
-  };
- 
-  template <typename MsgType>
-  using TopicDeque = std::deque<boost::shared_ptr<MsgType>>;
-  template <typename MsgType>
-  using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
-
-  // TopicInfo maintains per-topic data: a deque, past messages
-  // etc
-  template <typename MsgType>
-  struct TopicInfo {
-    TopicDeque<MsgType> deque;
-    TopicVec<MsgType> past;
-    bool has_dropped_messages{false};
-    ros::Duration inter_message_lower_bound{ros::Duration(0)};
-    uint32_t  num_virtual_moves{0};
-    bool warned_about_incorrect_bound{false};
-  };
-
-  // TypeInfo holds all data for a particular message type
-  template <typename MsgType>
-  struct TypeInfo {
-    std::vector<TopicInfo<MsgType>>  topic_info;
-    std::map<std::string, int> topic_to_index;
-  };
-
   template <typename ... MsgTypes>
   class ApproximateSync {
+  public:
     // the signature of the callback function depends on the MsgTypes template
     // parameter.
-    typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...>
-    CallbackArg;
     typedef std::function<void(const std::vector<boost::shared_ptr<
                                const MsgTypes>>& ...)> Callback;
-    typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
-    
-  public:
+
     // create an approximate sync like the one in ROS1, but with
     // flexible number of topics per type.
     // The callback signature looks different. For example
@@ -79,7 +39,7 @@ namespace flex_sync {
     // for MsgType1, the second the topics for MsgType2
 
     ApproximateSync(const std::vector<std::vector<std::string>> &topics,
-                Callback cb, size_t queueSize) :
+                    Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
       TopicInfoInitializer tii;
       (void) for_each(type_infos_, &tii);
@@ -107,8 +67,6 @@ namespace flex_sync {
       topic_info.deque.push_back(msg);
       if (topic_info.deque.size() == 1ul) {
         ++num_non_empty_deques_;
-        //std::cout << "num non-empty deques: " << num_non_empty_deques_
-        // << " vs total: " << tot_num_deques_ << std::endl;
         if (num_non_empty_deques_ == tot_num_deques_) {
           update(); // all deques have messages, go for it
         }
@@ -117,9 +75,6 @@ namespace flex_sync {
       }
       // check for queue overflow and handle if necesary
       if (topic_info.deque.size() + topic_info.past.size() > queue_size_) {
-        //         std::cout << "queue overflow: " << topic_info.deque.size()
-        //      << " + " <<  topic_info.past.size() << " > "
-        //        << queue_size_ << std::endl;
         // Cancel ongoing candidate search, if any:
         num_non_empty_deques_ = 0; // We will recompute it from scratch
         Recover rcv;
@@ -137,6 +92,45 @@ namespace flex_sync {
       }
     }
   private:
+    typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...>
+    CallbackArg;
+    // define some simple collections
+    template <typename MsgType>
+    using TopicDeque = std::deque<boost::shared_ptr<MsgType>>;
+    template <typename MsgType>
+    using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
+    // TopicInfo maintains per-topic data: a deque, past messages
+    // etc
+    template <typename MsgType>
+    struct TopicInfo {
+      TopicDeque<MsgType> deque;
+      TopicVec<MsgType> past;
+      bool has_dropped_messages{false};
+      ros::Duration inter_message_lower_bound{ros::Duration(0)};
+      uint32_t  num_virtual_moves{0};
+      bool warned_about_incorrect_bound{false};
+    };
+    // TypeInfo holds all data for a particular message type
+    template <typename MsgType>
+    struct TypeInfo {
+      std::vector<TopicInfo<MsgType>>  topic_info;
+      std::map<std::string, int> topic_to_index;
+    };
+    typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
+ 
+    // FullIndex has two components: which type, and which topic within
+    // that type
+    struct FullIndex {
+      FullIndex(int32_t tp = -1, int32_t tc = -1): type(tp), topic(tc) {};
+      bool operator==(const FullIndex &a) {
+        return (type == a.type && topic == a.topic);
+      };
+      bool isValid() const { return(type != -1 && topic != -1); };
+      int32_t type;
+      int32_t topic;
+    };
+    
+
     struct TopicInfoInitializer {
       template<std::size_t I>
       int operate(ApproximateSync<MsgTypes ...> *sync) const
@@ -186,7 +180,7 @@ namespace flex_sync {
         auto &type_info = std::get<I>(sync->type_infos_);
         for (size_t j = 0; j < type_info.topic_info.size(); j++) {
           auto &topic_info = type_info.topic_info[j];
-          if (!((I == end_index_.type) && (j == (int)end_index_.topic))) {
+          if (!(((int)I == end_index_.type) && ((int)j == end_index_.topic))) {
             // No dropped message could have been better to use than
             // the ones we have, so it becomes ok to use this topic
             // as pivot in the future
