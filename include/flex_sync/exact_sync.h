@@ -1,0 +1,182 @@
+/* -*-c++-*--------------------------------------------------------------------
+ * 2020 Bernd Pfrommer bernd.pfrommer@gmail.com
+ */
+#ifndef FLEX_SYNC_EXACT_SYNC_H
+#define FLEX_SYNC_EXACT_SYNC_H
+
+#include <ros/ros.h>
+#include <functional>
+#include <string>
+#include <vector>
+#include <map>
+#include <mutex>
+#include <iostream>
+#include <utility>
+#include <tuple>
+#include <deque>
+/*
+ * Class for exact synchronizing across variable number of messages
+ */
+
+namespace flex_sync {
+
+  template <typename ... MsgTypes>
+  class ExactSync {
+    template <typename MsgType>
+    using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
+
+    // CallbackArg has arguments of the callback as a tuple
+    typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...>
+    CallbackArg;
+    // A time slot aggregates all messages for that time
+    struct TimeSlot {
+      int num_valid_messages{0};
+      CallbackArg candidate;
+    };
+    // TypeInfo holds all data for a particular message type
+    template <typename MsgType>
+    struct TypeInfo {
+      std::map<std::string, int> topic_to_index;
+    };
+    typedef std::map<ros::Time, std::shared_ptr<TimeSlot>> TimeToSlot;
+    typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
+
+    // the signature of the callback function depends on the MsgTypes template
+    // parameter.
+    typedef std::function<void(const std::vector<boost::shared_ptr<
+                               const MsgTypes>>& ...)> Callback;
+    
+  public:
+    // create an exact sync like the one in ROS1, but with
+    // flexible number of topics per type.
+    // The callback signature looks different. For example
+    // for two message types, MsgType1 and MsgType2 (e.g sensor_msgs::Image)
+    // void callback_approx(
+    //    const std::vector<MsgType1::ConstPtr> &im,
+    //    const std::vector<MsgType2::ConstPtr> &ci);
+    // The first element of the topics argument must have all the topics
+    // for MsgType1, the second the topics for MsgType2
+    // queueSize == 0 means no queue size limit
+
+    ExactSync(const std::vector<std::vector<std::string>> &topics,
+                Callback cb, size_t queueSize) :
+      topics_(topics), cb_(cb), queue_size_(queueSize) {
+      TopicIndexInitializer tii;
+      (void) for_each(type_infos_, &tii);
+    }
+
+    // Call this method to feed data into the sync.
+    // The topic must match one of the topics that were
+    // provided when the sync was created or bad things will happen.
+    // Once enough data is available the callback function will
+    // be called.
+    template<typename MsgPtrT>
+    void process(const std::string &topic, const MsgPtrT &msg) {
+      typedef TypeInfo<typename MsgPtrT::element_type const> TypeInfoT;
+      typedef std::vector<boost::shared_ptr<
+        typename MsgPtrT::element_type const>> VecT;
+      const ros::Time &t = msg->header.stamp;
+      auto it = time_to_slot_.find(t);
+      if (it == time_to_slot_.end()) {
+        std::shared_ptr<TimeSlot> slot = makeTimeSlot();
+        it = time_to_slot_.insert({t, slot}).first;
+      }
+      // find correct topic info via lookup by type 
+      TypeInfoT &ti = std::get<TypeInfoT>(type_infos_);
+      auto topic_it = ti.topic_to_index.find(topic);
+      if (topic_it == ti.topic_to_index.end()) {
+        ROS_ERROR_STREAM("flex_sync: invalid topic " << topic <<
+                         " for message type");
+        throw std::runtime_error("invalid topic: " + topic);
+      }
+      // from looked-up tuple, grab the right type
+      TimeSlot &slot = *(it->second);
+      VecT &msg_vec = std::get<VecT>(slot.candidate);
+      if (!msg_vec[topic_it->second]) {
+        msg_vec[topic_it->second] = msg; // save message
+        slot.num_valid_messages++;
+      }
+      if (slot.num_valid_messages == tot_num_topics_) {
+        // deliver callback
+        std::apply([this](auto &&... args) { cb_(args...); }, slot.candidate);
+        // clear this and all old tuples
+        auto itpp = it;
+        time_to_slot_.erase(time_to_slot_.begin(), ++itpp);
+      }
+      if (queue_size_ > 0)  {
+        while (time_to_slot_.size() > queue_size_) {
+          time_to_slot_.erase(time_to_slot_.begin());
+        }
+      }
+    }
+
+  private:
+    struct TopicIndexInitializer {
+      template<std::size_t I>
+      int operate(ExactSync<MsgTypes ...> *sync) const
+        {
+          const size_t num_topics = sync->topics_[I].size();
+          auto &type_info = std::get<I>(sync->type_infos_);
+          sync->tot_num_topics_ += num_topics;
+          // make map between topic string and index for
+          // lookup when data arrives
+          for (int t_idx = 0; t_idx < (int) sync->topics_[I].size(); t_idx++) {
+            type_info.topic_to_index[sync->topics_[I][t_idx]] = t_idx;
+          }
+          return (num_topics);
+        }
+    };
+
+    class TimeSlotMaker {
+    public:
+      TimeSlotMaker() {
+        timeSlot_.reset(new TimeSlot());
+      }
+      template<std::size_t I>
+      int operate(ExactSync<MsgTypes ...> *sync) const {
+        auto &type_info = std::get<I>(sync->type_infos_);
+        auto &cand = std::get<I>(timeSlot_->candidate);
+        cand.resize(type_info.topic_to_index.size());
+        return (0);
+      }
+      std::shared_ptr<TimeSlot> getTimeSlot() const { return (timeSlot_); }
+    private:
+      std::shared_ptr<TimeSlot> timeSlot_;
+    };
+
+    // TODO: this may be a slow operation, maybe we create it once
+    // on startup and make copy afterwards
+    std::shared_ptr<TimeSlot> makeTimeSlot() {
+      TimeSlotMaker tm;
+      (void) for_each(type_infos_, &tm);
+      return (tm.getTimeSlot());
+    }
+ 
+    // some neat template tricks picked up here:
+    // https://stackoverflow.com/questions/18063451/get-index-of-a-tuple-elements -type
+    // This template terminates the recursion
+    template<std::size_t I = 0, typename FuncT, typename... Tp>
+    inline typename std::enable_if<I == sizeof...(Tp), int>::type
+    for_each(std::tuple<Tp...> &, FuncT *) // Unused arg needs no name
+      { return 0; } // do nothing
+    
+    // This template recursively calls itself, thereby iterating
+    template<std::size_t I = 0, typename FuncT, typename... Tp>
+    inline typename std::enable_if<I < sizeof...(Tp), int>::type
+    for_each(std::tuple<Tp...>& t, FuncT *f)  {
+      const int rv = (*f).template operate<I>(this);
+      return (rv + for_each<I + 1, FuncT, Tp...>(t, f));
+    }
+
+    // ----------- variables -----------------------  
+    std::vector<std::vector<std::string>> topics_; // topics to be synced
+    Callback cb_;  // pointer to the callee
+    size_t queue_size_{0}; // keep at most this number of time stamps
+    TimeToSlot time_to_slot_; // maps header time to slot
+    TupleOfTypeInfo type_infos_; // tuple with per-msg-type topic maps
+    int tot_num_topics_{0}; // for deciding when time slot is complete
+  };
+}
+
+
+#endif // FLEX_SYNC_EXACT_SYNC_H
