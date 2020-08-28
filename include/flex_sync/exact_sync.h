@@ -4,6 +4,7 @@
 #ifndef FLEX_SYNC_EXACT_SYNC_H
 #define FLEX_SYNC_EXACT_SYNC_H
 
+#include <flex_sync/msg_pack.h>
 #include <ros/ros.h>
 #include <functional>
 #include <string>
@@ -19,12 +20,8 @@
  */
 
 namespace flex_sync {
-
   template <typename ... MsgTypes>
   class ExactSync {
-    template <typename MsgType>
-    using TopicVec = std::vector<boost::shared_ptr<MsgType>>;
-
     // CallbackArg has arguments of the callback as a tuple
     typedef std::tuple<std::vector<boost::shared_ptr<const MsgTypes>> ...>
     CallbackArg;
@@ -42,6 +39,8 @@ namespace flex_sync {
     typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
 
   public:
+    // Expose the messsage types
+    using message_types = MsgPack<MsgTypes...>;
     // the signature of the callback function depends on the MsgTypes template
     // parameter.
     typedef std::function<void(const std::vector<boost::shared_ptr<

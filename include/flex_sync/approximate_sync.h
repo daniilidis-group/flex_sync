@@ -4,6 +4,7 @@
 #ifndef FLEX_SYNC_APPROXIMATE_SYNC_H
 #define FLEX_SYNC_APPROXIMATE_SYNC_H
 
+#include <flex_sync/msg_pack.h>
 #include <ros/ros.h>
 #include <functional>
 #include <string>
@@ -23,6 +24,8 @@ namespace flex_sync {
   template <typename ... MsgTypes>
   class ApproximateSync {
   public:
+    // Expose the messsage types
+    using message_types = MsgPack<MsgTypes...>;
     // the signature of the callback function depends on the MsgTypes template
     // parameter.
     typedef std::function<void(const std::vector<boost::shared_ptr<
