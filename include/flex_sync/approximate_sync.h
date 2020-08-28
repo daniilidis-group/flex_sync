@@ -41,6 +41,13 @@ namespace flex_sync {
     ApproximateSync(const std::vector<std::vector<std::string>> &topics,
                     Callback cb, size_t queueSize) :
       topics_(topics), cb_(cb), queue_size_(queueSize) {
+      const size_t ntypes = sizeof...(MsgTypes);
+      if (ntypes != topics.size()) {
+        ROS_ERROR_STREAM(
+          "approximate sync: number of topic vectors: " << topics.size() <<
+          " does not match number of message types: " << ntypes);
+        throw (std::runtime_error("num topic vectors != num msg types"));
+      }
       TopicInfoInitializer tii;
       (void) for_each(type_infos_, &tii);
     }
