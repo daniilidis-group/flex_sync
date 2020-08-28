@@ -45,6 +45,20 @@ namespace flex_sync {
       (void) for_each(type_infos_, &tii);
     }
 
+    // returns total number of dropped messages since last clear
+    size_t getNumberDropped() const {
+      return (num_dropped_);
+    }
+    void clearNumberDropped() {
+      num_dropped_ = 0;
+    }
+
+    const std::vector<std::vector<std::string>> &getTopics() const {
+      return (topics_);
+    }
+
+    size_t getQueueSize() const { return (queue_size_); }
+
     // Call this method to feed data into the sync.
     // The topic must match one of the topics that were
     // provided when the sync was created or bad things will happen.
@@ -82,6 +96,7 @@ namespace flex_sync {
         // Drop the oldest message in the offending topic
         assert(!topic_info.deque.empty());
         topic_info.deque.pop_front();
+        num_dropped_++;
         topic_info.has_dropped_messages = true;
         if (pivot_.isValid()) {
           // The candidate is no longer valid. Destroy it.
@@ -740,6 +755,7 @@ namespace flex_sync {
     ros::Time candidate_end_;
     ros::Duration max_interval_duration_{ros::DURATION_MAX}; // TODO: actually
     double age_penalty_{0.1};
+    size_t num_dropped_{0}; // total number of dropped messages
   };
 }
 

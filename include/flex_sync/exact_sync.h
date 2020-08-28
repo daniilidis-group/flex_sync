@@ -41,12 +41,12 @@ namespace flex_sync {
     typedef std::map<ros::Time, std::shared_ptr<TimeSlot>> TimeToSlot;
     typedef std::tuple<TypeInfo<const MsgTypes>...> TupleOfTypeInfo;
 
+  public:
     // the signature of the callback function depends on the MsgTypes template
     // parameter.
     typedef std::function<void(const std::vector<boost::shared_ptr<
                                const MsgTypes>>& ...)> Callback;
     
-  public:
     // create an exact sync like the one in ROS1, but with
     // flexible number of topics per type.
     // The callback signature looks different. For example
@@ -65,6 +65,20 @@ namespace flex_sync {
       (void) for_each(type_infos_, &tii);
     }
 
+    // returns total number of dropped messages since last clear
+    size_t getNumberDropped() const {
+      return (num_dropped_);
+    }
+    void clearNumberDropped() {
+      num_dropped_ = 0;
+    }
+
+    const std::vector<std::vector<std::string>> &getTopics() const {
+      return (topics_);
+    }
+
+    size_t getQueueSize() const { return (queue_size_); }
+    
     // Call this method to feed data into the sync.
     // The topic must match one of the topics that were
     // provided when the sync was created or bad things will happen.
@@ -101,10 +115,18 @@ namespace flex_sync {
         std::apply([this](auto &&... args) { cb_(args...); }, slot.candidate);
         // clear this and all old tuples
         auto itpp = it;
-        time_to_slot_.erase(time_to_slot_.begin(), ++itpp);
+        itpp++;
+        while (time_to_slot_.begin() !=  itpp) {
+          if (time_to_slot_.begin() != it) {
+            num_dropped_ +=
+              (time_to_slot_.begin()->second)->num_valid_messages;
+          }
+          time_to_slot_.erase(time_to_slot_.begin());
+        }
       }
       if (queue_size_ > 0)  {
         while (time_to_slot_.size() > queue_size_) {
+          num_dropped_ += (time_to_slot_.begin()->second)->num_valid_messages;
           time_to_slot_.erase(time_to_slot_.begin());
         }
       }
@@ -175,6 +197,7 @@ namespace flex_sync {
     TimeToSlot time_to_slot_; // maps header time to slot
     TupleOfTypeInfo type_infos_; // tuple with per-msg-type topic maps
     int tot_num_topics_{0}; // for deciding when time slot is complete
+    size_t num_dropped_{0}; // total number of dropped messages
   };
 }
 
