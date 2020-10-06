@@ -147,8 +147,11 @@ namespace flex_sync {
     // that type
     struct FullIndex {
       FullIndex(int32_t tp = -1, int32_t tc = -1): type(tp), topic(tc) {};
-      bool operator==(const FullIndex &a) {
+      bool operator==(const FullIndex &a) const {
         return (type == a.type && topic == a.topic);
+      };
+      bool operator!=(const FullIndex &a) const {
+        return (!(a == *this));
       };
       bool isValid() const { return(type != -1 && topic != -1); };
       int32_t type;
@@ -599,7 +602,7 @@ namespace flex_sync {
               (void) for_each(type_infos_, &rvvm);
               // unused variable warning stopper
               (void)num_non_empty_deques_before_virtual_search;
-              assert(num_non_empty_deques_before_virtual_search ==
+              assert((int)num_non_empty_deques_before_virtual_search ==
                      num_non_empty_deques_);
               break;
             }
