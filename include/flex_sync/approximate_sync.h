@@ -306,7 +306,7 @@ namespace flex_sync {
              topicIdx++) {
           const auto &ti = type_info.topic_info[topicIdx];
           const auto &deque = ti.deque;
-          const auto &past = ti.deque;
+          const auto &past = ti.past;
           // get virtual time
           ros::Time virtual_time;
           if (deque.empty()) {
